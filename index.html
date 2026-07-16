@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EPR Management System — Sign In</title>
+<link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+
+<div class="auth-shell">
+  <div class="auth-card">
+    <div class="auth-crest">EPR</div>
+    <h1>Sign in</h1>
+    <p class="sub">Église Presbytérienne au Rwanda — Management System</p>
+
+    <div class="error-msg" id="errorMsg"></div>
+
+    <form id="loginForm">
+      <div class="field">
+        <label for="email">Email</label>
+        <input type="email" id="email" required autocomplete="username" placeholder="you@epr.rw">
+      </div>
+      <div class="field">
+        <label for="password">Password</label>
+        <input type="password" id="password" required autocomplete="current-password" placeholder="••••••••">
+      </div>
+      <button type="submit" class="btn btn-primary" id="loginBtn">Sign in</button>
+    </form>
+
+    <p class="hint">Accounts are created by an EPR administrator.<br>Contact your administrator if you don't have login details.</p>
+  </div>
+</div>
+
+<script type="module">
+  import { auth, db, signInWithEmailAndPassword, onAuthStateChanged, doc, getDoc } from "./js/firebase-config.js";
+
+  const form = document.getElementById("loginForm");
+  const errorMsg = document.getElementById("errorMsg");
+  const loginBtn = document.getElementById("loginBtn");
+
+  // If already signed in, skip straight to the dashboard.
+  onAuthStateChanged(auth, (user) => {
+    if (user) window.location.href = "dashboard.html";
+  });
+
+  function showError(text) {
+    errorMsg.textContent = text;
+    errorMsg.style.display = "block";
+  }
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    errorMsg.style.display = "none";
+    loginBtn.disabled = true;
+    loginBtn.textContent = "Signing in…";
+
+    const email = document.getElementById("email").value.trim();
+    const password = document.getElementById("password").value;
+
+    try {
+      const cred = await signInWithEmailAndPassword(auth, email, password);
+
+      // Every authenticated account must have a matching users/{uid} profile
+      // with a role. If it's missing, this account isn't provisioned yet.
+      const profileSnap = await getDoc(doc(db, "users", cred.user.uid));
+      if (!profileSnap.exists()) {
+        showError("Your account has no assigned role yet. Contact the EPR administrator.");
+        loginBtn.disabled = false;
+        loginBtn.textContent = "Sign in";
+        return;
+      }
+
+      window.location.href = "dashboard.html";
+    } catch (err) {
+      const map = {
+        "auth/invalid-credential": "Incorrect email or password.",
+        "auth/user-not-found": "Incorrect email or password.",
+        "auth/wrong-password": "Incorrect email or password.",
+        "auth/too-many-requests": "Too many attempts. Try again later.",
+        "auth/invalid-email": "Enter a valid email address."
+      };
+      showError(map[err.code] || "Something went wrong. Please try again.");
+      loginBtn.disabled = false;
+      loginBtn.textContent = "Sign in";
+    }
+  });
+</script>
+</body>
+</html>

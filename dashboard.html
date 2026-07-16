@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EPR Management System</title>
+<link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+
+<div class="shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="brand"><div class="mark">EPR</div><span>EPR System</span></div>
+    <nav id="navList"></nav>
+    <div class="sidebar-footer">
+      <div class="who">
+        <div class="avatar" id="avatarInitial">?</div>
+        <div class="meta">
+          <div class="name" id="whoName">Loading…</div>
+          <div class="role" id="whoRole">—</div>
+        </div>
+      </div>
+      <button class="nav-item" id="logoutBtn">↩ Sign out</button>
+    </div>
+  </aside>
+
+  <main class="main" id="main">
+    <div class="topbar">
+      <div>
+        <h1 id="pageTitle">Loading…</h1>
+        <div class="crumb" id="pageCrumb"></div>
+      </div>
+      <div id="pageActions"></div>
+    </div>
+    <div id="content"></div>
+  </main>
+</div>
+
+<!-- Record add/edit modal -->
+<div class="modal-backdrop" id="recordModalBackdrop">
+  <div class="modal">
+    <h3 id="recordModalTitle">Add record</h3>
+    <div class="error-msg" id="recordError"></div>
+    <form id="recordForm">
+      <div class="field" id="categoryField">
+        <label for="recCategory">Category</label>
+        <select id="recCategory"></select>
+      </div>
+      <div class="field">
+        <label for="recTitle">Title</label>
+        <input type="text" id="recTitle" required placeholder="e.g. Youth camp — Q3">
+      </div>
+      <div class="field">
+        <label for="recDescription">Description / notes</label>
+        <textarea id="recDescription" rows="3" placeholder="Optional details"></textarea>
+      </div>
+      <div class="field">
+        <label for="recStatus">Status</label>
+        <select id="recStatus">
+          <option>Planned</option>
+          <option>Ongoing</option>
+          <option>Completed</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="recDate">Date</label>
+        <input type="date" id="recDate">
+      </div>
+      <div class="actions">
+        <button type="button" class="btn btn-ghost" id="recordCancelBtn">Cancel</button>
+        <button type="submit" class="btn btn-primary" id="recordSaveBtn" style="width:auto;">Save record</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Staff add/edit modal -->
+<div class="modal-backdrop" id="userModalBackdrop">
+  <div class="modal">
+    <h3 id="userModalTitle">Add staff account</h3>
+    <div class="error-msg" id="userError"></div>
+    <form id="userForm">
+      <div class="field">
+        <label for="uName">Full name</label>
+        <input type="text" id="uName" required placeholder="e.g. Jean Mukiza">
+      </div>
+      <div class="field" id="uEmailField">
+        <label for="uEmail">Email</label>
+        <input type="email" id="uEmail" required placeholder="name@epr.rw">
+      </div>
+      <div class="field" id="uPasswordField">
+        <label for="uPassword">Temporary password</label>
+        <input type="text" id="uPassword" placeholder="At least 6 characters">
+      </div>
+      <div class="field">
+        <label for="uRole">Access level</label>
+        <select id="uRole">
+          <option value="staff">Department / Presbytery staff</option>
+          <option value="superadmin">EPR Super Admin (full access)</option>
+        </select>
+      </div>
+      <div class="field" id="uScopeField">
+        <label for="uScope">Assigned department / presbytery</label>
+        <select id="uScope"></select>
+      </div>
+      <div class="actions">
+        <button type="button" class="btn btn-ghost" id="userCancelBtn">Cancel</button>
+        <button type="submit" class="btn btn-primary" id="userSaveBtn" style="width:auto;">Save account</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

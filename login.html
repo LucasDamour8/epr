@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EPR Management System - Sign In</title>
+
+    <!-- Styles -->
+    <link rel="stylesheet" href="./css/styles.css">
+</head>
+<body>
+
+<div class="auth-shell">
+    <div class="auth-card">
+
+        <div class="auth-crest">EPR</div>
+
+        <h1>Sign in</h1>
+
+        <p class="sub">
+            Église Presbytérienne au Rwanda — Management System
+        </p>
+
+        <div id="errorMsg" class="error-msg"></div>
+
+        <form id="loginForm">
+
+            <div class="field">
+                <label for="email">Email Address</label>
+                <input
+                    type="email"
+                    id="email"
+                    placeholder="Enter your email"
+                    autocomplete="username"
+                    required>
+            </div>
+
+            <div class="field">
+                <label for="password">Password</label>
+                <input
+                    type="password"
+                    id="password"
+                    placeholder="Enter your password"
+                    autocomplete="current-password"
+                    required>
+            </div>
+
+            <button id="loginBtn" class="btn btn-primary" type="submit">
+                Sign In
+            </button>
+
+        </form>
+
+        <p class="hint">
+            Accounts are created by an EPR administrator.<br>
+            Contact your administrator if you don't have login details.
+        </p>
+
+    </div>
+</div>
+
+<script type="module">
+
+import {
+    auth,
+    db,
+    signInWithEmailAndPassword,
+    onAuthStateChanged,
+    doc,
+    getDoc
+} from "./js/firebase-config.js";
+
+const form = document.getElementById("loginForm");
+const loginBtn = document.getElementById("loginBtn");
+const errorMsg = document.getElementById("errorMsg");
+
+function showError(message) {
+    errorMsg.textContent = message;
+    errorMsg.style.display = "block";
+}
+
+function hideError() {
+    errorMsg.style.display = "none";
+    errorMsg.textContent = "";
+}
+
+onAuthStateChanged(auth, (user) => {
+    if (user) {
+        window.location.href = "dashboard.html";
+    }
+});
+
+form.addEventListener("submit", async (e) => {
+
+    e.preventDefault();
+
+    hideError();
+
+    loginBtn.disabled = true;
+    loginBtn.textContent = "Signing In...";
+
+    const email = document.getElementById("email").value.trim();
+    const password = document.getElementById("password").value;
+
+    try {
+
+        const credential = await signInWithEmailAndPassword(
+            auth,
+            email,
+            password
+        );
+
+        const userDoc = await getDoc(
+            doc(db, "users", credential.user.uid)
+        );
+
+        if (!userDoc.exists()) {
+
+            showError("Your account has not been assigned a role. Please contact the administrator.");
+
+            loginBtn.disabled = false;
+            loginBtn.textContent = "Sign In";
+
+            return;
+        }
+
+        window.location.href = "dashboard.html";
+
+    } catch (error) {
+
+        let message = "Unable to sign in.";
+
+        switch (error.code) {
+
+            case "auth/invalid-email":
+                message = "Please enter a valid email address.";
+                break;
+
+            case "auth/user-not-found":
+            case "auth/wrong-password":
+            case "auth/invalid-credential":
+                message = "Incorrect email or password.";
+                break;
+
+            case "auth/too-many-requests":
+                message = "Too many login attempts. Please try again later.";
+                break;
+
+            default:
+                message = error.message;
+        }
+
+        showError(message);
+
+        loginBtn.disabled = false;
+        loginBtn.textContent = "Sign In";
+    }
+
+});
+
+</script>
+
+</body>
+</html>
