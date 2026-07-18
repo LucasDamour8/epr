@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>EPR Management System — Sign In</title>
+<title>EPR Management System — Sign in</title>
 <link rel="stylesheet" href="css/styles.css">
 </head>
 <body>
@@ -12,77 +12,62 @@
   <div class="auth-card">
     <div class="auth-crest">EPR</div>
     <h1>Sign in</h1>
-    <p class="sub">Église Presbytérienne au Rwanda — Management System</p>
+    <p class="sub">EPR Management System — staff and admin access</p>
 
-    <div class="error-msg" id="errorMsg"></div>
+    <div class="error-msg" id="loginError"></div>
 
     <form id="loginForm">
       <div class="field">
-        <label for="email">Email</label>
-        <input type="email" id="email" required autocomplete="username" placeholder="you@epr.rw">
+        <label for="lEmail">Email</label>
+        <input type="email" id="lEmail" required placeholder="name@epr.rw" autocomplete="username">
       </div>
       <div class="field">
-        <label for="password">Password</label>
-        <input type="password" id="password" required autocomplete="current-password" placeholder="••••••••">
+        <label for="lPassword">Password</label>
+        <input type="password" id="lPassword" required placeholder="Your password" autocomplete="current-password">
       </div>
       <button type="submit" class="btn btn-primary" id="loginBtn">Sign in</button>
     </form>
 
-    <p class="hint">Accounts are created by an EPR administrator.<br>Contact your administrator if you don't have login details.</p>
+    <p class="hint">Don't have an account? Ask your EPR Super Admin to create one for you.</p>
   </div>
 </div>
 
 <script type="module">
-  import { auth, db, signInWithEmailAndPassword, onAuthStateChanged, doc, getDoc } from "./js/firebase-config.js";
+  import { auth, onAuthStateChanged, signInWithEmailAndPassword } from "./js/firebase-config.js";
 
-  const form = document.getElementById("loginForm");
-  const errorMsg = document.getElementById("errorMsg");
-  const loginBtn = document.getElementById("loginBtn");
+  const $ = (id) => document.getElementById(id);
 
-  // If already signed in, skip straight to the dashboard.
+  // Already signed in? Skip straight to the dashboard.
   onAuthStateChanged(auth, (user) => {
     if (user) window.location.href = "dashboard.html";
   });
 
-  function showError(text) {
-    errorMsg.textContent = text;
-    errorMsg.style.display = "block";
-  }
-
-  form.addEventListener("submit", async (e) => {
+  $("loginForm").addEventListener("submit", async (e) => {
     e.preventDefault();
-    errorMsg.style.display = "none";
-    loginBtn.disabled = true;
-    loginBtn.textContent = "Signing in…";
+    $("loginError").style.display = "none";
+    const btn = $("loginBtn");
+    btn.disabled = true;
+    btn.textContent = "Signing in…";
 
-    const email = document.getElementById("email").value.trim();
-    const password = document.getElementById("password").value;
+    const email = $("lEmail").value.trim();
+    const password = $("lPassword").value;
 
     try {
-      const cred = await signInWithEmailAndPassword(auth, email, password);
-
-      // Every authenticated account must have a matching users/{uid} profile
-      // with a role. If it's missing, this account isn't provisioned yet.
-      const profileSnap = await getDoc(doc(db, "users", cred.user.uid));
-      if (!profileSnap.exists()) {
-        showError("Your account has no assigned role yet. Contact the EPR administrator.");
-        loginBtn.disabled = false;
-        loginBtn.textContent = "Sign in";
-        return;
-      }
-
+      await signInWithEmailAndPassword(auth, email, password);
       window.location.href = "dashboard.html";
     } catch (err) {
       const map = {
+        "auth/invalid-email": "Enter a valid email address.",
         "auth/invalid-credential": "Incorrect email or password.",
-        "auth/user-not-found": "Incorrect email or password.",
+        "auth/user-not-found": "No account found for that email.",
         "auth/wrong-password": "Incorrect email or password.",
-        "auth/too-many-requests": "Too many attempts. Try again later.",
-        "auth/invalid-email": "Enter a valid email address."
+        "auth/too-many-requests": "Too many attempts. Try again in a moment."
       };
-      showError(map[err.code] || "Something went wrong. Please try again.");
-      loginBtn.disabled = false;
-      loginBtn.textContent = "Sign in";
+      $("loginError").textContent = map[err.code] || err.message;
+      $("loginError").style.display = "block";
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Sign in";
     }
   });
 </script>
