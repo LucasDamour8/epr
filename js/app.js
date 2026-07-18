@@ -1,4 +1,3 @@
-
 // js/app.js
 import {
   auth, db, secondaryAuth,
@@ -260,26 +259,28 @@ function paintRecords(scopeType, scopeId) {
 
   const isDept = scopeType === "department";
   body.innerHTML = `
-    <table>
-      <thead><tr>
-        ${isDept ? "<th>Category</th>" : ""}
-        <th>Title</th><th>Status</th><th>Date</th><th>Notes</th><th></th>
-      </tr></thead>
-      <tbody>
-        ${rows.map(r => `
-          <tr>
-            ${isDept ? `<td><span class="tag gold">${r.category || "—"}</span></td>` : ""}
-            <td><strong>${escapeHtml(r.title)}</strong></td>
-            <td><span class="tag">${r.status || "Planned"}</span></td>
-            <td>${r.date || "—"}</td>
-            <td>${escapeHtml(r.description || "—")}</td>
-            <td class="row-actions">
-              <button class="btn btn-ghost btn-sm" data-edit="${r.id}">Edit</button>
-              <button class="btn btn-danger btn-sm" data-del="${r.id}">Delete</button>
-            </td>
-          </tr>`).join("")}
-      </tbody>
-    </table>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          ${isDept ? "<th>Category</th>" : ""}
+          <th>Title</th><th>Status</th><th>Date</th><th>Notes</th><th></th>
+        </tr></thead>
+        <tbody>
+          ${rows.map(r => `
+            <tr>
+              ${isDept ? `<td><span class="tag gold">${r.category || "—"}</span></td>` : ""}
+              <td><strong>${escapeHtml(r.title)}</strong></td>
+              <td><span class="tag">${r.status || "Planned"}</span></td>
+              <td>${r.date || "—"}</td>
+              <td>${escapeHtml(r.description || "—")}</td>
+              <td class="row-actions">
+                <button class="btn btn-ghost btn-sm" data-edit="${r.id}">Edit</button>
+                <button class="btn btn-danger btn-sm" data-del="${r.id}">Delete</button>
+              </td>
+            </tr>`).join("")}
+        </tbody>
+      </table>
+    </div>
   `;
 
   body.querySelectorAll("[data-edit]").forEach(btn => {
@@ -291,7 +292,11 @@ function paintRecords(scopeType, scopeId) {
   body.querySelectorAll("[data-del]").forEach(btn => {
     btn.addEventListener("click", async () => {
       if (confirm("Delete this record? This cannot be undone.")) {
-        await deleteDoc(doc(db, "records", btn.dataset.del));
+        try {
+          await deleteDoc(doc(db, "records", btn.dataset.del));
+        } catch (err) {
+          alert("Couldn't delete: " + err.message);
+        }
       }
     });
   });
@@ -320,6 +325,10 @@ function openRecordModal(scopeType, scopeId, record = null) {
 
   $("recordForm").onsubmit = async (e) => {
     e.preventDefault();
+    const saveBtn = $("recordSaveBtn");
+    saveBtn.disabled = true;
+    saveBtn.textContent = "Saving…";
+
     const payload = {
       scopeType, scopeId,
       category: isDept ? $("recCategory").value : null,
@@ -334,6 +343,8 @@ function openRecordModal(scopeType, scopeId, record = null) {
       if (editingRecordId) {
         await updateDoc(doc(db, "records", editingRecordId), payload);
       } else {
+        // addDoc auto-creates the "records" collection on first write —
+        // nothing needs to be set up in Firestore beforehand.
         await addDoc(collection(db, "records"), {
           ...payload,
           createdAt: serverTimestamp(),
@@ -344,6 +355,9 @@ function openRecordModal(scopeType, scopeId, record = null) {
     } catch (err) {
       $("recordError").textContent = "Couldn't save: " + err.message;
       $("recordError").style.display = "block";
+    } finally {
+      saveBtn.disabled = false;
+      saveBtn.textContent = "Save record";
     }
   };
 }
@@ -374,6 +388,8 @@ function renderUsers() {
     snap.forEach(d => rows.push({ id: d.id, ...d.data() }));
     rows.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
     paintUsers(rows);
+  }, (err) => {
+    $("usersBody").innerHTML = `<div class="empty-state">Couldn't load accounts. ${err.message}</div>`;
   });
 }
 
@@ -384,22 +400,24 @@ function paintUsers(rows) {
     return;
   }
   body.innerHTML = `
-    <table>
-      <thead><tr><th>Name</th><th>Email</th><th>Access</th><th>Assigned to</th><th></th></tr></thead>
-      <tbody>
-        ${rows.map(u => `
-          <tr>
-            <td><strong>${escapeHtml(u.name || "—")}</strong></td>
-            <td>${escapeHtml(u.email || "—")}</td>
-            <td><span class="badge-role ${u.role === "superadmin" ? "super" : ""}">${u.role === "superadmin" ? "Super Admin" : "Staff"}</span></td>
-            <td>${u.role === "superadmin" ? "All departments" : scopeLabel(u.scopeType, u.scopeId)}</td>
-            <td class="row-actions">
-              <button class="btn btn-ghost btn-sm" data-edit="${u.id}">Edit</button>
-              ${u.id !== currentUser.uid ? `<button class="btn btn-danger btn-sm" data-del="${u.id}">Revoke</button>` : ""}
-            </td>
-          </tr>`).join("")}
-      </tbody>
-    </table>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Name</th><th>Email</th><th>Access</th><th>Assigned to</th><th></th></tr></thead>
+        <tbody>
+          ${rows.map(u => `
+            <tr>
+              <td><strong>${escapeHtml(u.name || "—")}</strong></td>
+              <td>${escapeHtml(u.email || "—")}</td>
+              <td><span class="badge-role ${u.role === "superadmin" ? "super" : ""}">${u.role === "superadmin" ? "Super Admin" : "Staff"}</span></td>
+              <td>${u.role === "superadmin" ? "All departments" : scopeLabel(u.scopeType, u.scopeId)}</td>
+              <td class="row-actions">
+                <button class="btn btn-ghost btn-sm" data-edit="${u.id}">Edit</button>
+                ${u.id !== currentUser.uid ? `<button class="btn btn-danger btn-sm" data-del="${u.id}">Revoke</button>` : ""}
+              </td>
+            </tr>`).join("")}
+        </tbody>
+      </table>
+    </div>
   `;
 
   body.querySelectorAll("[data-edit]").forEach(btn => {
@@ -411,7 +429,11 @@ function paintUsers(rows) {
   body.querySelectorAll("[data-del]").forEach(btn => {
     btn.addEventListener("click", async () => {
       if (confirm("Revoke this person's access? Their login will stop working immediately. (Their sign-in credentials still exist in Firebase Auth — remove those separately in the Firebase console if needed.)")) {
-        await deleteDoc(doc(db, "users", btn.dataset.del));
+        try {
+          await deleteDoc(doc(db, "users", btn.dataset.del));
+        } catch (err) {
+          alert("Couldn't revoke: " + err.message);
+        }
       }
     });
   });
@@ -448,6 +470,10 @@ function openUserModal(user = null) {
 
   $("userForm").onsubmit = async (e) => {
     e.preventDefault();
+    const saveBtn = $("userSaveBtn");
+    saveBtn.disabled = true;
+    saveBtn.textContent = "Saving…";
+
     const role = $("uRole").value;
     const [scopeType, scopeId] = role === "superadmin" ? [null, null] : $("uScope").value.split(":");
     const name = $("uName").value.trim();
@@ -463,6 +489,8 @@ function openUserModal(user = null) {
         // Created through the secondary app instance so the Super Admin's
         // own session in the primary app is not replaced.
         const cred = await createUserWithEmailAndPassword(secondaryAuth, email, password);
+        // setDoc auto-creates the "users" collection/document on first write —
+        // nothing needs to be set up in Firestore beforehand.
         await setDoc(doc(db, "users", cred.user.uid), {
           name, email, role, scopeType, scopeId,
           createdAt: serverTimestamp(),
@@ -479,6 +507,9 @@ function openUserModal(user = null) {
       };
       $("userError").textContent = map[err.code] || err.message;
       $("userError").style.display = "block";
+    } finally {
+      saveBtn.disabled = false;
+      saveBtn.textContent = "Save account";
     }
   };
 }
