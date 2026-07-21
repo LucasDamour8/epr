@@ -282,26 +282,28 @@ function paintRecords(scopeType, scopeId) {
 
   const isDept = scopeType === "department";
   body.innerHTML = `
-    <table>
-      <thead><tr>
-        ${isDept ? "<th>Category</th>" : ""}
-        <th>Title</th><th>Status</th><th>Date</th><th>Notes</th><th></th>
-      </tr></thead>
-      <tbody>
-        ${rows.map(r => `
-          <tr>
-            ${isDept ? `<td><span class="tag gold">${r.category || "—"}</span></td>` : ""}
-            <td><strong>${escapeHtml(r.title)}</strong></td>
-            <td><span class="tag">${r.status || "Planned"}</span></td>
-            <td>${r.date || "—"}</td>
-            <td>${escapeHtml(r.description || "—")}</td>
-            <td class="row-actions">
-              <button class="btn btn-ghost btn-sm" data-edit="${r.id}">Edit</button>
-              <button class="btn btn-danger btn-sm" data-del="${r.id}">Delete</button>
-            </td>
-          </tr>`).join("")}
-      </tbody>
-    </table>
+    <div class="table-scroll">
+      <table>
+        <thead><tr>
+          ${isDept ? "<th>Category</th>" : ""}
+          <th>Title</th><th>Status</th><th>Date</th><th>Notes</th><th></th>
+        </tr></thead>
+        <tbody>
+          ${rows.map(r => `
+            <tr>
+              ${isDept ? `<td><span class="tag gold">${r.category || "—"}</span></td>` : ""}
+              <td><strong>${escapeHtml(r.title)}</strong></td>
+              <td><span class="tag">${r.status || "Planned"}</span></td>
+              <td>${r.date || "—"}</td>
+              <td>${escapeHtml(r.description || "—")}</td>
+              <td class="row-actions">
+                <button class="btn btn-ghost btn-sm" data-edit="${r.id}">Edit</button>
+                <button class="btn btn-danger btn-sm" data-del="${r.id}">Delete</button>
+              </td>
+            </tr>`).join("")}
+        </tbody>
+      </table>
+    </div>
   `;
 
   body.querySelectorAll("[data-edit]").forEach(btn => {
@@ -363,7 +365,7 @@ function renderReports() {
   }
 
   const scopeControlHtml = profile.role === "superadmin"
-    ? `<div class="field" style="max-width:340px;">
+    ? `<div class="field">
          <label for="reportScopeSelect">Report scope</label>
          <select id="reportScopeSelect">
            <option value="all">Overall — all departments &amp; presbyteries</option>
@@ -375,7 +377,7 @@ function renderReports() {
            </optgroup>
          </select>
        </div>`
-    : `<div class="field" style="max-width:340px;">
+    : `<div class="field">
          <label>Report scope</label>
          <input type="text" value="${scopeLabel(profile.scopeType, profile.scopeId)}" disabled>
        </div>`;
@@ -516,23 +518,25 @@ function paintReport() {
 
   const showScopeCol = reportScope === "all";
   $("reportBody").innerHTML = `
-    <table>
-      <thead><tr>
-        ${showScopeCol ? "<th>Scope</th>" : ""}
-        <th>Category</th><th>Title</th><th>Status</th><th>Date</th><th>Notes</th>
-      </tr></thead>
-      <tbody>
-        ${rows.map(r => `
-          <tr>
-            ${showScopeCol ? `<td>${escapeHtml(scopeLabel(r.scopeType, r.scopeId))}</td>` : ""}
-            <td>${r.category ? `<span class="tag gold">${escapeHtml(r.category)}</span>` : "—"}</td>
-            <td><strong>${escapeHtml(r.title)}</strong></td>
-            <td><span class="tag">${r.status || "Planned"}</span></td>
-            <td>${r.date || "—"}</td>
-            <td>${escapeHtml(r.description || "—")}</td>
-          </tr>`).join("")}
-      </tbody>
-    </table>
+    <div class="table-scroll">
+      <table>
+        <thead><tr>
+          ${showScopeCol ? "<th>Scope</th>" : ""}
+          <th>Category</th><th>Title</th><th>Status</th><th>Date</th><th>Notes</th>
+        </tr></thead>
+        <tbody>
+          ${rows.map(r => `
+            <tr>
+              ${showScopeCol ? `<td>${escapeHtml(scopeLabel(r.scopeType, r.scopeId))}</td>` : ""}
+              <td>${r.category ? `<span class="tag gold">${escapeHtml(r.category)}</span>` : "—"}</td>
+              <td><strong>${escapeHtml(r.title)}</strong></td>
+              <td><span class="tag">${r.status || "Planned"}</span></td>
+              <td>${r.date || "—"}</td>
+              <td>${escapeHtml(r.description || "—")}</td>
+            </tr>`).join("")}
+        </tbody>
+      </table>
+    </div>
   `;
 }
 
@@ -623,22 +627,24 @@ function paintUsers(rows) {
     return;
   }
   body.innerHTML = `
-    <table>
-      <thead><tr><th>Name</th><th>Email</th><th>Access</th><th>Assigned to</th><th></th></tr></thead>
-      <tbody>
-        ${rows.map(u => `
-          <tr>
-            <td><strong>${escapeHtml(u.name || "—")}</strong></td>
-            <td>${escapeHtml(u.email || "—")}</td>
-            <td><span class="badge-role ${u.role === "superadmin" ? "super" : ""}">${u.role === "superadmin" ? "Super Admin" : "Staff"}</span></td>
-            <td>${u.role === "superadmin" ? "All departments" : scopeLabel(u.scopeType, u.scopeId)}</td>
-            <td class="row-actions">
-              <button class="btn btn-ghost btn-sm" data-edit="${u.id}">Edit</button>
-              ${u.id !== currentUser.uid ? `<button class="btn btn-danger btn-sm" data-del="${u.id}">Revoke</button>` : ""}
-            </td>
-          </tr>`).join("")}
-      </tbody>
-    </table>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Name</th><th>Email</th><th>Access</th><th>Assigned to</th><th></th></tr></thead>
+        <tbody>
+          ${rows.map(u => `
+            <tr>
+              <td><strong>${escapeHtml(u.name || "—")}</strong></td>
+              <td>${escapeHtml(u.email || "—")}</td>
+              <td><span class="badge-role ${u.role === "superadmin" ? "super" : ""}">${u.role === "superadmin" ? "Super Admin" : "Staff"}</span></td>
+              <td>${u.role === "superadmin" ? "All departments" : scopeLabel(u.scopeType, u.scopeId)}</td>
+              <td class="row-actions">
+                <button class="btn btn-ghost btn-sm" data-edit="${u.id}">Edit</button>
+                ${u.id !== currentUser.uid ? `<button class="btn btn-danger btn-sm" data-del="${u.id}">Revoke</button>` : ""}
+              </td>
+            </tr>`).join("")}
+        </tbody>
+      </table>
+    </div>
   `;
 
   body.querySelectorAll("[data-edit]").forEach(btn => {
