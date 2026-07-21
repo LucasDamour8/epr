@@ -12,10 +12,18 @@ let currentUser = null;     // { uid, email }
 let profile = null;         // { name, email, role, scopeType, scopeId }
 let unsubscribeRecords = null;
 let unsubscribeUsers = null;
+let unsubscribeReports = null;
 let cachedRecords = [];
 let activeCategory = "All";
 let editingRecordId = null;
 let editingUserId = null;
+
+// Reports state — persists while navigating so filters don't reset every click
+let reportScope = "all";        // "all" | "department:<id>" | "presbytery:<id>"
+let reportPreset = "30d";       // "today" | "7d" | "30d" | "annual" | "custom"
+let reportCustomFrom = "";
+let reportCustomTo = "";
+let reportRecords = [];
 
 const $ = (id) => document.getElementById(id);
 
@@ -70,6 +78,7 @@ function buildSidebar() {
 
   if (profile.role === "superadmin") {
     nav.appendChild(navItem("Overview", "#/overview"));
+    nav.appendChild(navItem("Reports", "#/reports"));
 
     nav.appendChild(sectionLabel("Departments"));
     for (const [id, d] of Object.entries(DEPARTMENTS)) {
@@ -84,9 +93,10 @@ function buildSidebar() {
     nav.appendChild(sectionLabel("Administration"));
     nav.appendChild(navItem("Manage staff accounts", "#/users"));
   } else {
-    // A department/presbytery user only ever sees their own scope.
+    // A department/presbytery user only ever sees their own scope + reports.
     const label = scopeLabel(profile.scopeType, profile.scopeId);
     nav.appendChild(navItem(label, `#/${profile.scopeType}/${profile.scopeId}`));
+    nav.appendChild(navItem("Reports", "#/reports"));
   }
 }
 
@@ -121,9 +131,10 @@ function route() {
   const parts = location.hash.replace("#/", "").split("/");
   const [scopeType, scopeId] = parts;
 
-  // Guard: staff can only ever view their own assigned scope.
+  // Guard: staff can only ever view their own assigned scope (Reports is exempt —
+  // everyone may see reports, staff just can't pick a different scope inside it).
   if (profile.role !== "superadmin") {
-    if (scopeType !== profile.scopeType || scopeId !== profile.scopeId) {
+    if (scopeType !== "reports" && (scopeType !== profile.scopeType || scopeId !== profile.scopeId)) {
       location.hash = `#/${profile.scopeType}/${profile.scopeId}`;
       return;
     }
@@ -131,6 +142,8 @@ function route() {
 
   if (scopeType === "overview" && profile.role === "superadmin") {
     renderOverview();
+  } else if (scopeType === "reports") {
+    renderReports();
   } else if (scopeType === "users" && profile.role === "superadmin") {
     renderUsers();
   } else if (scopeType === "department" && DEPARTMENTS[scopeId]) {
@@ -145,6 +158,7 @@ function route() {
 function cleanupListeners() {
   if (unsubscribeRecords) { unsubscribeRecords(); unsubscribeRecords = null; }
   if (unsubscribeUsers) { unsubscribeUsers(); unsubscribeUsers = null; }
+  if (unsubscribeReports) { unsubscribeReports(); unsubscribeReports = null; }
 }
 
 /* ============================== OVERVIEW ================================ */
@@ -203,8 +217,17 @@ function renderScope(scopeType, scopeId) {
   $("pageCrumb").textContent = profile.role === "superadmin"
     ? "Viewing as EPR Super Admin — full access"
     : "Your department — view and manage your own data";
-  $("pageActions").innerHTML = `<button class="btn btn-primary" style="width:auto;" id="addRecordBtn">+ Add record</button>`;
+  $("pageActions").innerHTML = `
+    <span style="display:flex;gap:8px;">
+      <button class="btn btn-ghost" style="width:auto;" id="viewReportBtn">📊 View report</button>
+      <button class="btn btn-primary" style="width:auto;" id="addRecordBtn">+ Add record</button>
+    </span>
+  `;
   $("addRecordBtn").addEventListener("click", () => openRecordModal(scopeType, scopeId));
+  $("viewReportBtn").addEventListener("click", () => {
+    reportScope = `${scopeType}:${scopeId}`;
+    location.hash = "#/reports";
+  });
 
   const categoryChips = isDept
     ? `<div class="chips" id="categoryChips" style="margin-bottom:18px;">
@@ -259,28 +282,26 @@ function paintRecords(scopeType, scopeId) {
 
   const isDept = scopeType === "department";
   body.innerHTML = `
-    <div class="table-wrap">
-      <table>
-        <thead><tr>
-          ${isDept ? "<th>Category</th>" : ""}
-          <th>Title</th><th>Status</th><th>Date</th><th>Notes</th><th></th>
-        </tr></thead>
-        <tbody>
-          ${rows.map(r => `
-            <tr>
-              ${isDept ? `<td><span class="tag gold">${r.category || "—"}</span></td>` : ""}
-              <td><strong>${escapeHtml(r.title)}</strong></td>
-              <td><span class="tag">${r.status || "Planned"}</span></td>
-              <td>${r.date || "—"}</td>
-              <td>${escapeHtml(r.description || "—")}</td>
-              <td class="row-actions">
-                <button class="btn btn-ghost btn-sm" data-edit="${r.id}">Edit</button>
-                <button class="btn btn-danger btn-sm" data-del="${r.id}">Delete</button>
-              </td>
-            </tr>`).join("")}
-        </tbody>
-      </table>
-    </div>
+    <table>
+      <thead><tr>
+        ${isDept ? "<th>Category</th>" : ""}
+        <th>Title</th><th>Status</th><th>Date</th><th>Notes</th><th></th>
+      </tr></thead>
+      <tbody>
+        ${rows.map(r => `
+          <tr>
+            ${isDept ? `<td><span class="tag gold">${r.category || "—"}</span></td>` : ""}
+            <td><strong>${escapeHtml(r.title)}</strong></td>
+            <td><span class="tag">${r.status || "Planned"}</span></td>
+            <td>${r.date || "—"}</td>
+            <td>${escapeHtml(r.description || "—")}</td>
+            <td class="row-actions">
+              <button class="btn btn-ghost btn-sm" data-edit="${r.id}">Edit</button>
+              <button class="btn btn-danger btn-sm" data-del="${r.id}">Delete</button>
+            </td>
+          </tr>`).join("")}
+      </tbody>
+    </table>
   `;
 
   body.querySelectorAll("[data-edit]").forEach(btn => {
@@ -292,14 +313,227 @@ function paintRecords(scopeType, scopeId) {
   body.querySelectorAll("[data-del]").forEach(btn => {
     btn.addEventListener("click", async () => {
       if (confirm("Delete this record? This cannot be undone.")) {
-        try {
-          await deleteDoc(doc(db, "records", btn.dataset.del));
-        } catch (err) {
-          alert("Couldn't delete: " + err.message);
-        }
+        await deleteDoc(doc(db, "records", btn.dataset.del));
       }
     });
   });
+}
+
+/* =============================== REPORTS ================================= */
+
+const RANGE_LABELS = { today: "Today", "7d": "7 Days", "30d": "30 Days", annual: "Annual", custom: "Custom" };
+
+function pad2(n) { return String(n).padStart(2, "0"); }
+function toDateStr(d) { return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`; }
+
+function computeReportRange() {
+  const today = new Date();
+  const todayStr = toDateStr(today);
+
+  if (reportPreset === "today") return { from: todayStr, to: todayStr };
+
+  if (reportPreset === "7d") {
+    const from = new Date(today); from.setDate(from.getDate() - 6);
+    return { from: toDateStr(from), to: todayStr };
+  }
+
+  if (reportPreset === "30d") {
+    const from = new Date(today); from.setDate(from.getDate() - 29);
+    return { from: toDateStr(from), to: todayStr };
+  }
+
+  if (reportPreset === "annual") {
+    return { from: `${today.getFullYear()}-01-01`, to: `${today.getFullYear()}-12-31` };
+  }
+
+  // custom
+  return { from: reportCustomFrom || null, to: reportCustomTo || null };
+}
+
+function renderReports() {
+  $("pageTitle").textContent = "Reports";
+  $("pageCrumb").textContent = "Filter, review, and print an activity report";
+  $("pageActions").innerHTML = `<button class="btn btn-primary" style="width:auto;" id="printReportBtn">🖨 Print report</button>`;
+  $("printReportBtn").addEventListener("click", () => window.print());
+
+  // Staff are always locked to their own scope; superadmin keeps whatever
+  // scope was last selected (defaults to "all" the very first time).
+  if (profile.role !== "superadmin") {
+    reportScope = `${profile.scopeType}:${profile.scopeId}`;
+  }
+
+  const scopeControlHtml = profile.role === "superadmin"
+    ? `<div class="field" style="max-width:340px;">
+         <label for="reportScopeSelect">Report scope</label>
+         <select id="reportScopeSelect">
+           <option value="all">Overall — all departments &amp; presbyteries</option>
+           <optgroup label="Departments">
+             ${Object.entries(DEPARTMENTS).map(([id, d]) => `<option value="department:${id}">${d.name}</option>`).join("")}
+           </optgroup>
+           <optgroup label="Presbyteries">
+             ${Object.entries(PRESBYTERIES).map(([id, p]) => `<option value="presbytery:${id}">${p.name}</option>`).join("")}
+           </optgroup>
+         </select>
+       </div>`
+    : `<div class="field" style="max-width:340px;">
+         <label>Report scope</label>
+         <input type="text" value="${scopeLabel(profile.scopeType, profile.scopeId)}" disabled>
+       </div>`;
+
+  $("content").innerHTML = `
+    <div class="panel no-print">
+      <div class="panel-body">
+        <div class="report-controls">
+          ${scopeControlHtml}
+          <div class="field">
+            <label>Date range</label>
+            <div class="chips" id="rangeChips">
+              ${Object.keys(RANGE_LABELS).map(p => `
+                <button type="button" class="chip ${reportPreset === p ? "active" : ""}" data-range="${p}">${RANGE_LABELS[p]}</button>
+              `).join("")}
+            </div>
+          </div>
+          <div class="field" id="customRangeFields" style="display:${reportPreset === "custom" ? "flex" : "none"};gap:10px;">
+            <div style="flex:1;min-width:140px;">
+              <label for="customFrom">From</label>
+              <input type="date" id="customFrom" value="${reportCustomFrom}">
+            </div>
+            <div style="flex:1;min-width:140px;">
+              <label for="customTo">To</label>
+              <input type="date" id="customTo" value="${reportCustomTo}">
+            </div>
+          </div>
+        </div>
+        <p style="font-size:12.5px;color:var(--ink-soft);margin:14px 0 0;">Only records with a date set are included in the report.</p>
+      </div>
+    </div>
+
+    <div id="reportPrintArea">
+      <div class="print-header">
+        <div class="print-crest">EPR</div>
+        <div>
+          <h2 id="printTitle">Activity Report</h2>
+          <div id="printMeta" class="crumb"></div>
+        </div>
+      </div>
+
+      <div class="stat-grid" id="reportSummary"></div>
+
+      <div class="panel">
+        <div class="panel-head"><h2>Records</h2></div>
+        <div class="panel-body" id="reportBody"><div class="empty-state">Loading…</div></div>
+      </div>
+    </div>
+  `;
+
+  if (profile.role === "superadmin") {
+    $("reportScopeSelect").value = reportScope;
+    $("reportScopeSelect").addEventListener("change", (e) => {
+      reportScope = e.target.value;
+      subscribeReportData();
+    });
+  }
+
+  document.querySelectorAll("#rangeChips .chip").forEach(chip => {
+    chip.addEventListener("click", () => {
+      reportPreset = chip.dataset.range;
+      document.querySelectorAll("#rangeChips .chip").forEach(c => c.classList.remove("active"));
+      chip.classList.add("active");
+      $("customRangeFields").style.display = reportPreset === "custom" ? "flex" : "none";
+      paintReport();
+    });
+  });
+
+  const customFromEl = $("customFrom");
+  const customToEl = $("customTo");
+  if (customFromEl) customFromEl.addEventListener("change", () => { reportCustomFrom = customFromEl.value; paintReport(); });
+  if (customToEl) customToEl.addEventListener("change", () => { reportCustomTo = customToEl.value; paintReport(); });
+
+  subscribeReportData();
+}
+
+function subscribeReportData() {
+  if (unsubscribeReports) { unsubscribeReports(); unsubscribeReports = null; }
+  if ($("reportBody")) $("reportBody").innerHTML = `<div class="empty-state">Loading…</div>`;
+
+  let q;
+  if (reportScope === "all") {
+    q = collection(db, "records");
+  } else {
+    const [scopeType, scopeId] = reportScope.split(":");
+    q = query(collection(db, "records"), where("scopeType", "==", scopeType), where("scopeId", "==", scopeId));
+  }
+
+  unsubscribeReports = onSnapshot(q, (snap) => {
+    reportRecords = [];
+    snap.forEach(d => reportRecords.push({ id: d.id, ...d.data() }));
+    paintReport();
+  }, (err) => {
+    if ($("reportBody")) $("reportBody").innerHTML = `<div class="empty-state">Couldn't load records. ${err.message}</div>`;
+  });
+}
+
+function paintReport() {
+  if (!$("reportBody")) return; // navigated away before this ran
+
+  const { from, to } = computeReportRange();
+  const rangeValid = reportPreset !== "custom" || (from && to);
+
+  let rows = rangeValid
+    ? reportRecords.filter(r => r.date && (!from || r.date >= from) && (!to || r.date <= to))
+    : [];
+  rows = rows.slice().sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+
+  const scopeLabelText = reportScope === "all"
+    ? "Overall — all departments & presbyteries"
+    : (() => { const [t, i] = reportScope.split(":"); return scopeLabel(t, i); })();
+
+  const rangeLabelText = reportPreset === "custom"
+    ? (rangeValid ? `${from} to ${to}` : "Select a custom date range")
+    : { today: "Today", "7d": "Last 7 days", "30d": "Last 30 days", annual: `Calendar year ${new Date().getFullYear()}` }[reportPreset];
+
+  $("printTitle").textContent = reportScope === "all" ? "Overall Activity Report" : `${scopeLabelText} — Activity Report`;
+  $("printMeta").textContent = `Range: ${rangeLabelText} · Generated ${new Date().toLocaleString()} · By ${profile.name || currentUser.email}`;
+
+  const statusCounts = { Planned: 0, Ongoing: 0, Completed: 0 };
+  rows.forEach(r => { statusCounts[r.status || "Planned"] = (statusCounts[r.status || "Planned"] || 0) + 1; });
+
+  $("reportSummary").innerHTML = [
+    { label: "Total records", value: rows.length },
+    { label: "Planned", value: statusCounts.Planned },
+    { label: "Ongoing", value: statusCounts.Ongoing },
+    { label: "Completed", value: statusCounts.Completed }
+  ].map(c => `<div class="stat-card"><div class="label">${c.label}</div><div class="stat-value">${c.value}</div></div>`).join("");
+
+  if (!rangeValid) {
+    $("reportBody").innerHTML = `<div class="empty-state">Choose a "From" and "To" date to generate the report.</div>`;
+    return;
+  }
+  if (rows.length === 0) {
+    $("reportBody").innerHTML = `<div class="empty-state"><div class="big">No records in this range</div>Try a wider date range or a different scope.</div>`;
+    return;
+  }
+
+  const showScopeCol = reportScope === "all";
+  $("reportBody").innerHTML = `
+    <table>
+      <thead><tr>
+        ${showScopeCol ? "<th>Scope</th>" : ""}
+        <th>Category</th><th>Title</th><th>Status</th><th>Date</th><th>Notes</th>
+      </tr></thead>
+      <tbody>
+        ${rows.map(r => `
+          <tr>
+            ${showScopeCol ? `<td>${escapeHtml(scopeLabel(r.scopeType, r.scopeId))}</td>` : ""}
+            <td>${r.category ? `<span class="tag gold">${escapeHtml(r.category)}</span>` : "—"}</td>
+            <td><strong>${escapeHtml(r.title)}</strong></td>
+            <td><span class="tag">${r.status || "Planned"}</span></td>
+            <td>${r.date || "—"}</td>
+            <td>${escapeHtml(r.description || "—")}</td>
+          </tr>`).join("")}
+      </tbody>
+    </table>
+  `;
 }
 
 /* ============================ RECORD MODAL ============================== */
@@ -325,10 +559,6 @@ function openRecordModal(scopeType, scopeId, record = null) {
 
   $("recordForm").onsubmit = async (e) => {
     e.preventDefault();
-    const saveBtn = $("recordSaveBtn");
-    saveBtn.disabled = true;
-    saveBtn.textContent = "Saving…";
-
     const payload = {
       scopeType, scopeId,
       category: isDept ? $("recCategory").value : null,
@@ -343,8 +573,6 @@ function openRecordModal(scopeType, scopeId, record = null) {
       if (editingRecordId) {
         await updateDoc(doc(db, "records", editingRecordId), payload);
       } else {
-        // addDoc auto-creates the "records" collection on first write —
-        // nothing needs to be set up in Firestore beforehand.
         await addDoc(collection(db, "records"), {
           ...payload,
           createdAt: serverTimestamp(),
@@ -355,9 +583,6 @@ function openRecordModal(scopeType, scopeId, record = null) {
     } catch (err) {
       $("recordError").textContent = "Couldn't save: " + err.message;
       $("recordError").style.display = "block";
-    } finally {
-      saveBtn.disabled = false;
-      saveBtn.textContent = "Save record";
     }
   };
 }
@@ -388,8 +613,6 @@ function renderUsers() {
     snap.forEach(d => rows.push({ id: d.id, ...d.data() }));
     rows.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
     paintUsers(rows);
-  }, (err) => {
-    $("usersBody").innerHTML = `<div class="empty-state">Couldn't load accounts. ${err.message}</div>`;
   });
 }
 
@@ -400,24 +623,22 @@ function paintUsers(rows) {
     return;
   }
   body.innerHTML = `
-    <div class="table-wrap">
-      <table>
-        <thead><tr><th>Name</th><th>Email</th><th>Access</th><th>Assigned to</th><th></th></tr></thead>
-        <tbody>
-          ${rows.map(u => `
-            <tr>
-              <td><strong>${escapeHtml(u.name || "—")}</strong></td>
-              <td>${escapeHtml(u.email || "—")}</td>
-              <td><span class="badge-role ${u.role === "superadmin" ? "super" : ""}">${u.role === "superadmin" ? "Super Admin" : "Staff"}</span></td>
-              <td>${u.role === "superadmin" ? "All departments" : scopeLabel(u.scopeType, u.scopeId)}</td>
-              <td class="row-actions">
-                <button class="btn btn-ghost btn-sm" data-edit="${u.id}">Edit</button>
-                ${u.id !== currentUser.uid ? `<button class="btn btn-danger btn-sm" data-del="${u.id}">Revoke</button>` : ""}
-              </td>
-            </tr>`).join("")}
-        </tbody>
-      </table>
-    </div>
+    <table>
+      <thead><tr><th>Name</th><th>Email</th><th>Access</th><th>Assigned to</th><th></th></tr></thead>
+      <tbody>
+        ${rows.map(u => `
+          <tr>
+            <td><strong>${escapeHtml(u.name || "—")}</strong></td>
+            <td>${escapeHtml(u.email || "—")}</td>
+            <td><span class="badge-role ${u.role === "superadmin" ? "super" : ""}">${u.role === "superadmin" ? "Super Admin" : "Staff"}</span></td>
+            <td>${u.role === "superadmin" ? "All departments" : scopeLabel(u.scopeType, u.scopeId)}</td>
+            <td class="row-actions">
+              <button class="btn btn-ghost btn-sm" data-edit="${u.id}">Edit</button>
+              ${u.id !== currentUser.uid ? `<button class="btn btn-danger btn-sm" data-del="${u.id}">Revoke</button>` : ""}
+            </td>
+          </tr>`).join("")}
+      </tbody>
+    </table>
   `;
 
   body.querySelectorAll("[data-edit]").forEach(btn => {
@@ -429,11 +650,7 @@ function paintUsers(rows) {
   body.querySelectorAll("[data-del]").forEach(btn => {
     btn.addEventListener("click", async () => {
       if (confirm("Revoke this person's access? Their login will stop working immediately. (Their sign-in credentials still exist in Firebase Auth — remove those separately in the Firebase console if needed.)")) {
-        try {
-          await deleteDoc(doc(db, "users", btn.dataset.del));
-        } catch (err) {
-          alert("Couldn't revoke: " + err.message);
-        }
+        await deleteDoc(doc(db, "users", btn.dataset.del));
       }
     });
   });
@@ -470,10 +687,6 @@ function openUserModal(user = null) {
 
   $("userForm").onsubmit = async (e) => {
     e.preventDefault();
-    const saveBtn = $("userSaveBtn");
-    saveBtn.disabled = true;
-    saveBtn.textContent = "Saving…";
-
     const role = $("uRole").value;
     const [scopeType, scopeId] = role === "superadmin" ? [null, null] : $("uScope").value.split(":");
     const name = $("uName").value.trim();
@@ -489,8 +702,6 @@ function openUserModal(user = null) {
         // Created through the secondary app instance so the Super Admin's
         // own session in the primary app is not replaced.
         const cred = await createUserWithEmailAndPassword(secondaryAuth, email, password);
-        // setDoc auto-creates the "users" collection/document on first write —
-        // nothing needs to be set up in Firestore beforehand.
         await setDoc(doc(db, "users", cred.user.uid), {
           name, email, role, scopeType, scopeId,
           createdAt: serverTimestamp(),
@@ -507,9 +718,6 @@ function openUserModal(user = null) {
       };
       $("userError").textContent = map[err.code] || err.message;
       $("userError").style.display = "block";
-    } finally {
-      saveBtn.disabled = false;
-      saveBtn.textContent = "Save account";
     }
   };
 }
