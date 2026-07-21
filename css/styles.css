@@ -85,12 +85,7 @@ button{font-family:inherit;cursor:pointer;}
 .hint{font-size:12px;color:var(--ink-soft);margin-top:18px;text-align:center;}
 
 /* ---------- Dashboard shell ---------- */
-.shell{display:grid;grid-template-columns:260px 1fr;min-height:100vh;width:100%;}
-
-@media (max-width: 1100px) and (min-width: 861px){
-  .shell{grid-template-columns:220px 1fr;}
-  .main{padding:24px 26px;}
-}
+.shell{display:grid;grid-template-columns:260px 1fr;min-height:100vh;}
 .sidebar{
   background:var(--navy-deep);color:#dbe4f0;
   padding:22px 16px;display:flex;flex-direction:column;gap:4px;
@@ -123,50 +118,19 @@ button{font-family:inherit;cursor:pointer;}
 .who .meta .name{font-size:13px;font-weight:600;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .who .meta .role{font-size:11px;color:#8fa2b8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 
-.main{padding:28px 34px;max-width:1440px;margin:0 auto;width:100%;}
+.main{padding:28px 34px;max-width:1200px;}
 .topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:22px;flex-wrap:wrap;gap:12px;}
-.topbar h1{font-size:24px;margin:0;font-weight:700;letter-spacing:-.02em;color:var(--navy);}
-.topbar .crumb{font-size:13px;color:var(--ink-soft);margin-top:3px;letter-spacing:.01em;}
+.topbar h1{font-size:22px;margin:0;}
+.topbar .crumb{font-size:13px;color:var(--ink-soft);margin-top:2px;}
 
-.stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;margin-bottom:24px;}
-.stat-card{
-  position:relative;
-  background:var(--card);
-  border:1px solid var(--border);
-  border-radius:16px;
-  padding:18px 20px 16px;
-  box-shadow:var(--shadow);
-  overflow:hidden;
-  transition:transform .18s ease, box-shadow .18s ease;
-}
-.stat-card::before{
-  content:"";
-  position:absolute;
-  top:0;left:0;right:0;
-  height:3px;
-  background:linear-gradient(90deg, var(--blue), #5db3ec);
-}
-.stat-card:hover{
-  transform:translateY(-2px);
-  box-shadow:0 4px 10px rgba(15,30,60,.09), 0 14px 30px rgba(15,30,60,.09);
-}
-.stat-card .label{
-  font-size:11.5px;color:var(--ink-soft);font-weight:700;
-  text-transform:uppercase;letter-spacing:.06em;line-height:1.4;
-}
-.stat-value{
-  font-size:28px;font-weight:700;margin-top:6px;
-  letter-spacing:-.02em;color:var(--navy);
-  font-variant-numeric:tabular-nums;
-}
+.stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;margin-bottom:24px;}
+.stat-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px 18px;box-shadow:var(--shadow);}
+.stat-card .label{font-size:12px;color:var(--ink-soft);font-weight:600;text-transform:uppercase;letter-spacing:.04em;}
+.stat-value{font-size:26px;font-weight:700;margin-top:4px;}
 
-.panel{background:var(--card);border:1px solid var(--border);border-radius:16px;box-shadow:var(--shadow);overflow:hidden;margin-bottom:24px;}
-.panel-head{
-  display:flex;align-items:center;justify-content:space-between;
-  padding:16px 20px;border-bottom:1px solid var(--border);gap:10px;flex-wrap:wrap;
-  border-left:3px solid var(--blue);
-}
-.panel-head h2{font-size:15px;margin:0;font-weight:700;letter-spacing:-.01em;color:var(--navy);}
+.panel{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden;margin-bottom:24px;}
+.panel-head{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--border);gap:10px;flex-wrap:wrap;}
+.panel-head h2{font-size:15px;margin:0;}
 .panel-body{padding:14px 20px 20px;}
 
 .tag{display:inline-flex;align-items:center;padding:3px 9px;border-radius:99px;font-size:11.5px;font-weight:600;background:#eaf3fc;color:#1678c2;}
@@ -192,12 +156,37 @@ tr:last-child td{border-bottom:none;}
   align-items:center;justify-content:center;padding:20px;z-index:50;
 }
 .modal-backdrop.open{display:flex;}
-.modal{background:#fff;border-radius:18px;width:100%;max-width:440px;padding:26px;box-shadow:0 30px 70px rgba(0,0,0,.35);}
-.modal h3{margin:0 0 18px;font-size:18px;font-weight:700;letter-spacing:-.01em;color:var(--navy);padding-bottom:12px;border-bottom:2px solid var(--blue);}
+.modal{background:#fff;border-radius:14px;width:100%;max-width:440px;padding:24px;box-shadow:0 30px 70px rgba(0,0,0,.35);}
+.modal h3{margin:0 0 16px;font-size:17px;}
 .modal .actions{display:flex;justify-content:flex-end;gap:8px;margin-top:6px;}
 
 .badge-role{font-size:11px;font-weight:700;padding:3px 8px;border-radius:6px;background:#eef2f7;color:var(--ink-soft);}
 .badge-role.super{background:#122645;color:#fff;}
+
+/* ---------- Reports ---------- */
+.report-controls{display:flex;flex-wrap:wrap;gap:26px;align-items:flex-start;}
+.report-controls .field{margin-bottom:0;}
+.print-header{display:none;}
+
+@media print{
+  body{background:#fff;}
+  .sidebar, .topbar, .no-print, .modal-backdrop{display:none !important;}
+  .main{padding:0;max-width:none;}
+  .print-header{
+    display:flex;align-items:center;gap:14px;margin-bottom:18px;
+    border-bottom:2px solid var(--navy);padding-bottom:14px;
+  }
+  .print-header .print-crest{
+    width:44px;height:44px;border-radius:10px;background:var(--navy);color:#fff;
+    display:flex;align-items:center;justify-content:center;font-weight:700;
+    font-family:'Sora',sans-serif;flex-shrink:0;
+  }
+  .print-header h2{margin:0;font-size:18px;}
+  .print-header .crumb{margin-top:2px;}
+  .panel{box-shadow:none;border:1px solid #ccc;break-inside:avoid;}
+  table{font-size:12px;}
+  .stat-grid{gap:10px;margin-bottom:18px;}
+}
 
 @media (max-width: 860px){
   .shell{grid-template-columns:1fr;}
@@ -206,37 +195,4 @@ tr:last-child td{border-bottom:none;}
   .nav-section-label{display:none;}
   .sidebar-footer{margin-top:0;border-top:none;}
   .main{padding:20px;}
-}
-
-/* ---------- Responsive additions ---------- */
-
-/* Wrap every <table> in a scrollable container so wide tables don't
-   blow out the layout on phones — the table stays intact, the
-   container scrolls horizontally instead. */
-.table-wrap{
-  overflow-x:auto;
-  -webkit-overflow-scrolling:touch;
-}
-.table-wrap table{
-  min-width:640px; /* keeps columns readable instead of squashing */
-}
-
-/* Modals: on short/narrow screens let them scroll internally instead
-   of overflowing off the top/bottom of the viewport. */
-.modal{
-  max-height:90vh;
-  overflow-y:auto;
-}
-
-@media (max-width: 480px){
-  .modal{padding:20px 16px;}
-  .auth-card{padding:26px 20px;}
-  .topbar h1{font-size:19px;}
-  .btn-sm{padding:6px 10px;font-size:12.5px;}
-  .row-actions{flex-wrap:wrap;}
-}
-
-@media (max-width: 600px){
-  .panel-body{padding:12px 14px 16px;}
-  .panel-head{padding:14px 16px;}
 }
