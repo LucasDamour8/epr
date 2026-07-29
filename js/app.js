@@ -1,743 +1,737 @@
 // js/app.js
+// Main application logic: auth bootstrap, routing, sidebar, and every page.
+
 import {
   auth, db, secondaryAuth,
-  onAuthStateChanged, signOut,
-  createUserWithEmailAndPassword,
-  doc, getDoc, setDoc, updateDoc, deleteDoc,
-  addDoc, collection, query, where, onSnapshot, serverTimestamp
+  onAuthStateChanged, signInWithEmailAndPassword, signOut,
+  createUserWithEmailAndPassword, updatePassword,
+  doc, getDoc, setDoc, updateDoc, deleteDoc, addDoc,
+  collection, query, where, orderBy, onSnapshot, serverTimestamp
 } from "./firebase-config.js";
-import { DEPARTMENTS, PRESBYTERIES, allScopes, scopeLabel } from "./structure.js";
 
-let currentUser = null;     // { uid, email }
+import {
+  DEPARTMENTS, PRESBYTERIES, ACCOUNT_TYPES,
+  allScopes, allScopesWithHeadOffice, scopeLabel, HEAD_OFFICE_SCOPE
+} from "./structure.js";
+
+// ---------------------------------------------------------------------
+// STATE
+// ---------------------------------------------------------------------
+let currentUser = null;     // Firebase Auth user
 let profile = null;         // { name, email, role, scopeType, scopeId }
-let unsubscribeRecords = null;
-let unsubscribeUsers = null;
-let unsubscribeReports = null;
-let cachedRecords = [];
-let activeCategory = "All";
-let editingRecordId = null;
-let editingUserId = null;
+let unsubscribers = [];     // active onSnapshot listeners, cleared on route change
 
-// Reports state — persists while navigating so filters don't reset every click
-let reportScope = "all";        // "all" | "department:<id>" | "presbytery:<id>"
-let reportPreset = "30d";       // "today" | "7d" | "30d" | "annual" | "custom"
-let reportCustomFrom = "";
-let reportCustomTo = "";
-let reportRecords = [];
+function clearListeners() {
+  unsubscribers.forEach(u => u());
+  unsubscribers = [];
+}
 
-const $ = (id) => document.getElementById(id);
+function isSuperAdmin() {
+  return profile?.role === "superadmin";
+}
 
-/* ============================= AUTH GUARD ============================= */
+// The scope a STAFF user is locked to. Super Admins have no fixed scope.
+function myScope() {
+  if (isSuperAdmin()) return null;
+  return { type: profile.scopeType, id: profile.scopeId };
+}
 
+// Can the current user manage (add/edit/delete) records for this scope?
+function canManageScope(scopeType, scopeId) {
+  if (isSuperAdmin()) return true;
+  return profile?.scopeType === scopeType && profile?.scopeId === scopeId;
+}
+
+// ---------------------------------------------------------------------
+// AUTH BOOTSTRAP
+// ---------------------------------------------------------------------
 onAuthStateChanged(auth, async (user) => {
   if (!user) {
-    window.location.href = "index.html";
+    currentUser = null;
+    profile = null;
+    // No login form lives in this file — this SPA assumes login.html
+    // (or a login route) signs the user in and lands them here.
+    window.location.href = "login.html";
     return;
   }
   currentUser = user;
-
   const snap = await getDoc(doc(db, "users", user.uid));
   if (!snap.exists()) {
-    // No role assigned — this account isn't provisioned. Kick back to login.
-    await signOut(auth);
-    window.location.href = "index.html";
+    // Auth account exists but no Firestore profile — can't authorize anything.
+    document.getElementById("pageTitle").textContent = "Account not set up";
+    document.getElementById("content").innerHTML =
+      `<p>Your account has no profile record. Contact a Super Admin.</p>`;
     return;
   }
   profile = snap.data();
-
-  $("whoName").textContent = profile.name || currentUser.email;
-  $("whoRole").textContent = profile.role === "superadmin"
-    ? "EPR Super Admin"
-    : scopeLabel(profile.scopeType, profile.scopeId);
-  $("avatarInitial").textContent = (profile.name || currentUser.email).charAt(0).toUpperCase();
-
-  buildSidebar();
-
-  // Land on the user's home view.
-  if (!location.hash) {
-    location.hash = profile.role === "superadmin"
-      ? "#/overview"
-      : `#/${profile.scopeType}/${profile.scopeId}`;
-  } else {
-    route();
-  }
-});
-
-$("logoutBtn").addEventListener("click", async () => {
-  await signOut(auth);
-  window.location.href = "index.html";
+  renderShellForUser();
+  if (!location.hash) location.hash = "#/dashboard";
+  route();
 });
 
 window.addEventListener("hashchange", route);
 
-/* ============================== SIDEBAR ================================ */
+document.getElementById("logoutBtn").addEventListener("click", async () => {
+  await signOut(auth);
+});
 
-function buildSidebar() {
-  const nav = $("navList");
-  nav.innerHTML = "";
-
-  if (profile.role === "superadmin") {
-    nav.appendChild(navItem("Overview", "#/overview"));
-    nav.appendChild(navItem("Reports", "#/reports"));
-
-    nav.appendChild(sectionLabel("Departments"));
-    for (const [id, d] of Object.entries(DEPARTMENTS)) {
-      nav.appendChild(navItem(d.name, `#/department/${id}`));
-    }
-
-    nav.appendChild(sectionLabel("Presbyteries"));
-    for (const [id, p] of Object.entries(PRESBYTERIES)) {
-      nav.appendChild(navItem(p.name, `#/presbytery/${id}`));
-    }
-
-    nav.appendChild(sectionLabel("Administration"));
-    nav.appendChild(navItem("Manage staff accounts", "#/users"));
-  } else {
-    // A department/presbytery user only ever sees their own scope + reports.
-    const label = scopeLabel(profile.scopeType, profile.scopeId);
-    nav.appendChild(navItem(label, `#/${profile.scopeType}/${profile.scopeId}`));
-    nav.appendChild(navItem("Reports", "#/reports"));
+// ---------------------------------------------------------------------
+// SIDEBAR
+// ---------------------------------------------------------------------
+function navItemsForRole() {
+  const items = [
+    { route: "#/dashboard", label: "Dashboard", icon: "◆" },
+    { route: "#/records", label: isSuperAdmin() ? "Departments & Presbyteries" : "My Records", icon: "▤" },
+    { route: "#/reports", label: "Reports", icon: "▦" },
+    { route: "#/accounts", label: "Chart of Accounts", icon: "$" }
+  ];
+  if (isSuperAdmin()) {
+    items.push({ route: "#/users", label: "Manage Users", icon: "◎" });
   }
+  return items;
 }
 
-function sectionLabel(text) {
-  const el = document.createElement("div");
-  el.className = "nav-section-label";
-  el.textContent = text;
-  return el;
-}
+function renderShellForUser() {
+  document.getElementById("whoName").textContent = profile.name || currentUser.email;
+  document.getElementById("whoRole").textContent =
+    isSuperAdmin() ? "EPR Super Admin" : scopeLabel(profile.scopeType, profile.scopeId);
+  document.getElementById("avatarInitial").textContent =
+    (profile.name || currentUser.email || "?").trim().charAt(0).toUpperCase();
 
-function navItem(label, hash) {
-  const a = document.createElement("a");
-  a.className = "nav-item";
-  a.href = hash;
-  a.dataset.hash = hash;
-  a.innerHTML = `<span class="dot"></span><span>${label}</span>`;
-  return a;
+  const nav = document.getElementById("navList");
+  nav.innerHTML = "";
+  navItemsForRole().forEach(item => {
+    const btn = document.createElement("button");
+    btn.className = "nav-item";
+    btn.textContent = `${item.icon}  ${item.label}`;
+    btn.dataset.route = item.route;
+    btn.addEventListener("click", () => { location.hash = item.route; });
+    nav.appendChild(btn);
+  });
+  highlightActiveNav();
 }
 
 function highlightActiveNav() {
-  document.querySelectorAll(".nav-item").forEach(el => {
-    el.classList.toggle("active", el.dataset.hash === location.hash);
+  document.querySelectorAll("#navList .nav-item").forEach(btn => {
+    btn.classList.toggle("active", btn.dataset.route === (location.hash || "#/dashboard"));
   });
 }
 
-/* =============================== ROUTER ================================= */
-
+// ---------------------------------------------------------------------
+// ROUTER
+// ---------------------------------------------------------------------
 function route() {
+  if (!profile) return;
+  clearListeners();
   highlightActiveNav();
-  cleanupListeners();
+  const hash = location.hash || "#/dashboard";
 
-  const parts = location.hash.replace("#/", "").split("/");
-  const [scopeType, scopeId] = parts;
-
-  // Guard: staff can only ever view their own assigned scope (Reports is exempt —
-  // everyone may see reports, staff just can't pick a different scope inside it).
-  if (profile.role !== "superadmin") {
-    if (scopeType !== "reports" && (scopeType !== profile.scopeType || scopeId !== profile.scopeId)) {
-      location.hash = `#/${profile.scopeType}/${profile.scopeId}`;
-      return;
-    }
+  if (hash.startsWith("#/dashboard")) return renderDashboard();
+  if (hash.startsWith("#/records")) return renderRecords();
+  if (hash.startsWith("#/reports")) return renderReports();
+  if (hash.startsWith("#/accounts")) return renderAccounts();
+  if (hash.startsWith("#/users")) {
+    if (!isSuperAdmin()) { location.hash = "#/dashboard"; return; }
+    return renderUsers();
   }
+  location.hash = "#/dashboard";
+}
 
-  if (scopeType === "overview" && profile.role === "superadmin") {
-    renderOverview();
-  } else if (scopeType === "reports") {
-    renderReports();
-  } else if (scopeType === "users" && profile.role === "superadmin") {
-    renderUsers();
-  } else if (scopeType === "department" && DEPARTMENTS[scopeId]) {
-    renderScope("department", scopeId);
-  } else if (scopeType === "presbytery" && PRESBYTERIES[scopeId]) {
-    renderScope("presbytery", scopeId);
+function setPage(title, crumb, actionsHtml = "") {
+  document.getElementById("pageTitle").textContent = title;
+  document.getElementById("pageCrumb").textContent = crumb;
+  document.getElementById("pageActions").innerHTML = actionsHtml;
+}
+
+// ---------------------------------------------------------------------
+// DASHBOARD
+// ---------------------------------------------------------------------
+function renderDashboard() {
+  setPage("Dashboard", isSuperAdmin() ? "EPR — all scopes" : scopeLabel(profile.scopeType, profile.scopeId));
+  const content = document.getElementById("content");
+  content.innerHTML = `<div class="grid-cards" id="dashCards"><p>Loading…</p></div>`;
+
+  const cardsEl = document.getElementById("dashCards");
+
+  if (isSuperAdmin()) {
+    cardsEl.innerHTML = `
+      <div class="card"><h3>Departments</h3><p>${Object.keys(DEPARTMENTS).length}</p></div>
+      <div class="card"><h3>Presbyteries</h3><p>${Object.keys(PRESBYTERIES).length}</p></div>
+      <div class="card" id="dashRecordCount"><h3>Total records</h3><p>…</p></div>
+      <div class="card" id="dashAcctCount"><h3>Chart of Accounts</h3><p>…</p></div>
+    `;
+    const unsubR = onSnapshot(collection(db, "records"), snap => {
+      document.querySelector("#dashRecordCount p").textContent = snap.size;
+    });
+    const unsubA = onSnapshot(collection(db, "accounts"), snap => {
+      document.querySelector("#dashAcctCount p").textContent = snap.size;
+    });
+    unsubscribers.push(unsubR, unsubA);
   } else {
-    location.hash = profile.role === "superadmin" ? "#/overview" : `#/${profile.scopeType}/${profile.scopeId}`;
+    const scope = myScope();
+    cardsEl.innerHTML = `
+      <div class="card" id="dashRecordCount"><h3>My records</h3><p>…</p></div>
+      <div class="card" id="dashAcctCount"><h3>My Chart of Accounts entries</h3><p>…</p></div>
+    `;
+    const rq = query(collection(db, "records"), where("scopeType", "==", scope.type), where("scopeId", "==", scope.id));
+    const unsubR = onSnapshot(rq, snap => { document.querySelector("#dashRecordCount p").textContent = snap.size; });
+    const aq = query(collection(db, "accounts"), where("scopeType", "==", scope.type), where("scopeId", "==", scope.id));
+    const unsubA = onSnapshot(aq, snap => { document.querySelector("#dashAcctCount p").textContent = snap.size; });
+    unsubscribers.push(unsubR, unsubA);
   }
 }
 
-function cleanupListeners() {
-  if (unsubscribeRecords) { unsubscribeRecords(); unsubscribeRecords = null; }
-  if (unsubscribeUsers) { unsubscribeUsers(); unsubscribeUsers = null; }
-  if (unsubscribeReports) { unsubscribeReports(); unsubscribeReports = null; }
-}
+// ---------------------------------------------------------------------
+// RECORDS (department / presbytery activity records)
+// ---------------------------------------------------------------------
+let recordsScope = null; // currently viewed scope { type, id }
 
-/* ============================== OVERVIEW ================================ */
+function renderRecords() {
+  recordsScope = isSuperAdmin() ? recordsScope : myScope();
 
-function renderOverview() {
-  $("pageTitle").textContent = "Overview";
-  $("pageCrumb").textContent = "All departments and presbyteries — EPR Super Admin";
-  $("pageActions").innerHTML = "";
+  setPage("Records", "Activity records", `
+    <button class="btn btn-primary" id="addRecordBtn" style="width:auto;">+ Add record</button>
+  `);
 
-  const allIds = [
-    ...Object.entries(DEPARTMENTS).map(([id, d]) => ({ type: "department", id, name: d.name })),
-    ...Object.entries(PRESBYTERIES).map(([id, p]) => ({ type: "presbytery", id, name: p.name }))
-  ];
-
-  $("content").innerHTML = `
-    <div class="stat-grid" id="statGrid">
-      ${allIds.map(s => `
-        <div class="stat-card">
-          <div class="label">${s.name}</div>
-          <div class="stat-value" id="stat-${s.type}-${s.id}">—</div>
-        </div>`).join("")}
-    </div>
-    <div class="panel">
-      <div class="panel-head"><h2>Jump to a section</h2></div>
-      <div class="panel-body">
-        <div class="chips">
-          ${allIds.map(s => `<a class="chip" href="#/${s.type}/${s.id}">${s.name}</a>`).join("")}
-        </div>
-      </div>
-    </div>
+  const content = document.getElementById("content");
+  let scopePicker = "";
+  if (isSuperAdmin()) {
+    scopePicker = `<div class="field"><label>Scope</label><select id="recordScopePicker"></select></div>`;
+  }
+  content.innerHTML = `
+    ${scopePicker}
+    <table class="data-table">
+      <thead><tr><th>Title</th><th>Category</th><th>Status</th><th>Date</th><th></th></tr></thead>
+      <tbody id="recordsBody"><tr><td colspan="5">Select a scope…</td></tr></tbody>
+    </table>
   `;
 
-  // Live count per scope, superadmin can read everything.
-  unsubscribeRecords = onSnapshot(collection(db, "records"), (snap) => {
-    const counts = {};
+  if (isSuperAdmin()) {
+    const picker = document.getElementById("recordScopePicker");
+    allScopes().forEach(s => {
+      const opt = document.createElement("option");
+      opt.value = `${s.type}:${s.id}`;
+      opt.textContent = s.label;
+      picker.appendChild(opt);
+    });
+    if (!recordsScope) recordsScope = { type: allScopes()[0].type, id: allScopes()[0].id };
+    picker.value = `${recordsScope.type}:${recordsScope.id}`;
+    picker.addEventListener("change", () => {
+      const [type, id] = picker.value.split(":");
+      recordsScope = { type, id };
+      loadRecords();
+    });
+  }
+
+  document.getElementById("addRecordBtn").addEventListener("click", () => openRecordModal());
+  loadRecords();
+}
+
+function loadRecords() {
+  if (!recordsScope) return;
+  const body = document.getElementById("recordsBody");
+  const rq = query(
+    collection(db, "records"),
+    where("scopeType", "==", recordsScope.type),
+    where("scopeId", "==", recordsScope.id),
+    orderBy("createdAt", "desc")
+  );
+  const unsub = onSnapshot(rq, snap => {
+    if (snap.empty) { body.innerHTML = `<tr><td colspan="5">No records yet.</td></tr>`; return; }
+    body.innerHTML = "";
     snap.forEach(d => {
       const r = d.data();
-      const key = `${r.scopeType}-${r.scopeId}`;
-      counts[key] = (counts[key] || 0) + 1;
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${escapeHtml(r.title)}</td>
+        <td>${escapeHtml(r.category || "—")}</td>
+        <td><span class="badge">${escapeHtml(r.status || "Planned")}</span></td>
+        <td>${escapeHtml(r.date || "—")}</td>
+        <td>
+          <button class="btn-icon" data-edit="${d.id}">✎</button>
+          <button class="btn-icon" data-del="${d.id}">🗑</button>
+        </td>`;
+      body.appendChild(tr);
     });
-    allIds.forEach(s => {
-      const el = $(`stat-${s.type}-${s.id}`);
-      if (el) el.textContent = counts[`${s.type}-${s.id}`] || 0;
-    });
+    body.querySelectorAll("[data-edit]").forEach(b =>
+      b.addEventListener("click", () => openRecordModal(b.dataset.edit)));
+    body.querySelectorAll("[data-del]").forEach(b =>
+      b.addEventListener("click", () => deleteRecord(b.dataset.del)));
   });
+  unsubscribers.push(unsub);
 }
 
-/* ======================== DEPARTMENT / PRESBYTERY ======================== */
-
-function renderScope(scopeType, scopeId) {
-  const isDept = scopeType === "department";
-  const meta = isDept ? DEPARTMENTS[scopeId] : PRESBYTERIES[scopeId];
-  activeCategory = "All";
-
-  $("pageTitle").textContent = meta.name;
-  $("pageCrumb").textContent = profile.role === "superadmin"
-    ? "Viewing as EPR Super Admin — full access"
-    : "Your department — view and manage your own data";
-  $("pageActions").innerHTML = `
-    <span style="display:flex;gap:8px;">
-      <button class="btn btn-ghost" style="width:auto;" id="viewReportBtn">📊 View report</button>
-      <button class="btn btn-primary" style="width:auto;" id="addRecordBtn">+ Add record</button>
-    </span>
-  `;
-  $("addRecordBtn").addEventListener("click", () => openRecordModal(scopeType, scopeId));
-  $("viewReportBtn").addEventListener("click", () => {
-    reportScope = `${scopeType}:${scopeId}`;
-    location.hash = "#/reports";
-  });
-
-  const categoryChips = isDept
-    ? `<div class="chips" id="categoryChips" style="margin-bottom:18px;">
-         ${["All", ...meta.categories].map(c =>
-            `<button type="button" class="chip ${c === "All" ? "active" : ""}" data-cat="${c}">${c}</button>`
-          ).join("")}
-       </div>`
-    : "";
-
-  $("content").innerHTML = `
-    ${categoryChips}
-    <div class="panel">
-      <div class="panel-head">
-        <h2>Records</h2>
-      </div>
-      <div class="panel-body" id="recordsBody">
-        <div class="empty-state">Loading…</div>
-      </div>
-    </div>
-  `;
-
-  if (isDept) {
-    document.querySelectorAll("#categoryChips .chip").forEach(chip => {
-      chip.addEventListener("click", () => {
-        activeCategory = chip.dataset.cat;
-        document.querySelectorAll("#categoryChips .chip").forEach(c => c.classList.remove("active"));
-        chip.classList.add("active");
-        paintRecords(scopeType, scopeId);
-      });
-    });
-  }
-
-  const q = query(collection(db, "records"), where("scopeType", "==", scopeType), where("scopeId", "==", scopeId));
-  unsubscribeRecords = onSnapshot(q, (snap) => {
-    cachedRecords = [];
-    snap.forEach(d => cachedRecords.push({ id: d.id, ...d.data() }));
-    cachedRecords.sort((a, b) => (b.updatedAt?.seconds || 0) - (a.updatedAt?.seconds || 0));
-    paintRecords(scopeType, scopeId);
-  }, (err) => {
-    $("recordsBody").innerHTML = `<div class="empty-state">Couldn't load records. ${err.message}</div>`;
-  });
+async function deleteRecord(id) {
+  if (!confirm("Delete this record?")) return;
+  await deleteDoc(doc(db, "records", id));
 }
 
-function paintRecords(scopeType, scopeId) {
-  const body = $("recordsBody");
-  const rows = activeCategory === "All" ? cachedRecords : cachedRecords.filter(r => r.category === activeCategory);
+let editingRecordId = null;
 
-  if (rows.length === 0) {
-    body.innerHTML = `<div class="empty-state"><div class="big">No records yet</div>Add your first record using the button above.</div>`;
-    return;
-  }
+function openRecordModal(id = null) {
+  editingRecordId = id;
+  document.getElementById("recordError").textContent = "";
+  document.getElementById("recordModalTitle").textContent = id ? "Edit record" : "Add record";
 
-  const isDept = scopeType === "department";
-  body.innerHTML = `
-    <div class="table-scroll">
-      <table>
-        <thead><tr>
-          ${isDept ? "<th>Category</th>" : ""}
-          <th>Title</th><th>Status</th><th>Date</th><th>Notes</th><th></th>
-        </tr></thead>
-        <tbody>
-          ${rows.map(r => `
-            <tr>
-              ${isDept ? `<td><span class="tag gold">${r.category || "—"}</span></td>` : ""}
-              <td><strong>${escapeHtml(r.title)}</strong></td>
-              <td><span class="tag">${r.status || "Planned"}</span></td>
-              <td>${r.date || "—"}</td>
-              <td>${escapeHtml(r.description || "—")}</td>
-              <td class="row-actions">
-                <button class="btn btn-ghost btn-sm" data-edit="${r.id}">Edit</button>
-                <button class="btn btn-danger btn-sm" data-del="${r.id}">Delete</button>
-              </td>
-            </tr>`).join("")}
-        </tbody>
-      </table>
-    </div>
-  `;
-
-  body.querySelectorAll("[data-edit]").forEach(btn => {
-    btn.addEventListener("click", () => {
-      const rec = cachedRecords.find(r => r.id === btn.dataset.edit);
-      openRecordModal(scopeType, scopeId, rec);
-    });
-  });
-  body.querySelectorAll("[data-del]").forEach(btn => {
-    btn.addEventListener("click", async () => {
-      if (confirm("Delete this record? This cannot be undone.")) {
-        await deleteDoc(doc(db, "records", btn.dataset.del));
-      }
-    });
-  });
-}
-
-/* =============================== REPORTS ================================= */
-
-const RANGE_LABELS = { today: "Today", "7d": "7 Days", "30d": "30 Days", annual: "Annual", custom: "Custom" };
-
-function pad2(n) { return String(n).padStart(2, "0"); }
-function toDateStr(d) { return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`; }
-
-function computeReportRange() {
-  const today = new Date();
-  const todayStr = toDateStr(today);
-
-  if (reportPreset === "today") return { from: todayStr, to: todayStr };
-
-  if (reportPreset === "7d") {
-    const from = new Date(today); from.setDate(from.getDate() - 6);
-    return { from: toDateStr(from), to: todayStr };
-  }
-
-  if (reportPreset === "30d") {
-    const from = new Date(today); from.setDate(from.getDate() - 29);
-    return { from: toDateStr(from), to: todayStr };
-  }
-
-  if (reportPreset === "annual") {
-    return { from: `${today.getFullYear()}-01-01`, to: `${today.getFullYear()}-12-31` };
-  }
-
-  // custom
-  return { from: reportCustomFrom || null, to: reportCustomTo || null };
-}
-
-function renderReports() {
-  $("pageTitle").textContent = "Reports";
-  $("pageCrumb").textContent = "Filter, review, and print an activity report";
-  $("pageActions").innerHTML = `<button class="btn btn-primary" style="width:auto;" id="printReportBtn">🖨 Print report</button>`;
-  $("printReportBtn").addEventListener("click", () => window.print());
-
-  // Staff are always locked to their own scope; superadmin keeps whatever
-  // scope was last selected (defaults to "all" the very first time).
-  if (profile.role !== "superadmin") {
-    reportScope = `${profile.scopeType}:${profile.scopeId}`;
-  }
-
-  const scopeControlHtml = profile.role === "superadmin"
-    ? `<div class="field">
-         <label for="reportScopeSelect">Report scope</label>
-         <select id="reportScopeSelect">
-           <option value="all">Overall — all departments &amp; presbyteries</option>
-           <optgroup label="Departments">
-             ${Object.entries(DEPARTMENTS).map(([id, d]) => `<option value="department:${id}">${d.name}</option>`).join("")}
-           </optgroup>
-           <optgroup label="Presbyteries">
-             ${Object.entries(PRESBYTERIES).map(([id, p]) => `<option value="presbytery:${id}">${p.name}</option>`).join("")}
-           </optgroup>
-         </select>
-       </div>`
-    : `<div class="field">
-         <label>Report scope</label>
-         <input type="text" value="${scopeLabel(profile.scopeType, profile.scopeId)}" disabled>
-       </div>`;
-
-  $("content").innerHTML = `
-    <div class="panel no-print">
-      <div class="panel-body">
-        <div class="report-controls">
-          ${scopeControlHtml}
-          <div class="field">
-            <label>Date range</label>
-            <div class="chips" id="rangeChips">
-              ${Object.keys(RANGE_LABELS).map(p => `
-                <button type="button" class="chip ${reportPreset === p ? "active" : ""}" data-range="${p}">${RANGE_LABELS[p]}</button>
-              `).join("")}
-            </div>
-          </div>
-          <div class="field" id="customRangeFields" style="display:${reportPreset === "custom" ? "flex" : "none"};gap:10px;">
-            <div style="flex:1;min-width:140px;">
-              <label for="customFrom">From</label>
-              <input type="date" id="customFrom" value="${reportCustomFrom}">
-            </div>
-            <div style="flex:1;min-width:140px;">
-              <label for="customTo">To</label>
-              <input type="date" id="customTo" value="${reportCustomTo}">
-            </div>
-          </div>
-        </div>
-        <p style="font-size:12.5px;color:var(--ink-soft);margin:14px 0 0;">Only records with a date set are included in the report.</p>
-      </div>
-    </div>
-
-    <div id="reportPrintArea">
-      <div class="print-header">
-        <div class="print-crest">EPR</div>
-        <div>
-          <h2 id="printTitle">Activity Report</h2>
-          <div id="printMeta" class="crumb"></div>
-        </div>
-      </div>
-
-      <div class="stat-grid" id="reportSummary"></div>
-
-      <div class="panel">
-        <div class="panel-head"><h2>Records</h2></div>
-        <div class="panel-body" id="reportBody"><div class="empty-state">Loading…</div></div>
-      </div>
-    </div>
-  `;
-
-  if (profile.role === "superadmin") {
-    $("reportScopeSelect").value = reportScope;
-    $("reportScopeSelect").addEventListener("change", (e) => {
-      reportScope = e.target.value;
-      subscribeReportData();
-    });
-  }
-
-  document.querySelectorAll("#rangeChips .chip").forEach(chip => {
-    chip.addEventListener("click", () => {
-      reportPreset = chip.dataset.range;
-      document.querySelectorAll("#rangeChips .chip").forEach(c => c.classList.remove("active"));
-      chip.classList.add("active");
-      $("customRangeFields").style.display = reportPreset === "custom" ? "flex" : "none";
-      paintReport();
-    });
-  });
-
-  const customFromEl = $("customFrom");
-  const customToEl = $("customTo");
-  if (customFromEl) customFromEl.addEventListener("change", () => { reportCustomFrom = customFromEl.value; paintReport(); });
-  if (customToEl) customToEl.addEventListener("change", () => { reportCustomTo = customToEl.value; paintReport(); });
-
-  subscribeReportData();
-}
-
-function subscribeReportData() {
-  if (unsubscribeReports) { unsubscribeReports(); unsubscribeReports = null; }
-  if ($("reportBody")) $("reportBody").innerHTML = `<div class="empty-state">Loading…</div>`;
-
-  let q;
-  if (reportScope === "all") {
-    q = collection(db, "records");
-  } else {
-    const [scopeType, scopeId] = reportScope.split(":");
-    q = query(collection(db, "records"), where("scopeType", "==", scopeType), where("scopeId", "==", scopeId));
-  }
-
-  unsubscribeReports = onSnapshot(q, (snap) => {
-    reportRecords = [];
-    snap.forEach(d => reportRecords.push({ id: d.id, ...d.data() }));
-    paintReport();
-  }, (err) => {
-    if ($("reportBody")) $("reportBody").innerHTML = `<div class="empty-state">Couldn't load records. ${err.message}</div>`;
-  });
-}
-
-function paintReport() {
-  if (!$("reportBody")) return; // navigated away before this ran
-
-  const { from, to } = computeReportRange();
-  const rangeValid = reportPreset !== "custom" || (from && to);
-
-  let rows = rangeValid
-    ? reportRecords.filter(r => r.date && (!from || r.date >= from) && (!to || r.date <= to))
+  const categorySelect = document.getElementById("recCategory");
+  categorySelect.innerHTML = "";
+  const categories = recordsScope.type === "department"
+    ? (DEPARTMENTS[recordsScope.id]?.categories || [])
     : [];
-  rows = rows.slice().sort((a, b) => (a.date || "").localeCompare(b.date || ""));
-
-  const scopeLabelText = reportScope === "all"
-    ? "Overall — all departments & presbyteries"
-    : (() => { const [t, i] = reportScope.split(":"); return scopeLabel(t, i); })();
-
-  const rangeLabelText = reportPreset === "custom"
-    ? (rangeValid ? `${from} to ${to}` : "Select a custom date range")
-    : { today: "Today", "7d": "Last 7 days", "30d": "Last 30 days", annual: `Calendar year ${new Date().getFullYear()}` }[reportPreset];
-
-  $("printTitle").textContent = reportScope === "all" ? "Overall Activity Report" : `${scopeLabelText} — Activity Report`;
-  $("printMeta").textContent = `Range: ${rangeLabelText} · Generated ${new Date().toLocaleString()} · By ${profile.name || currentUser.email}`;
-
-  const statusCounts = { Planned: 0, Ongoing: 0, Completed: 0 };
-  rows.forEach(r => { statusCounts[r.status || "Planned"] = (statusCounts[r.status || "Planned"] || 0) + 1; });
-
-  $("reportSummary").innerHTML = [
-    { label: "Total records", value: rows.length },
-    { label: "Planned", value: statusCounts.Planned },
-    { label: "Ongoing", value: statusCounts.Ongoing },
-    { label: "Completed", value: statusCounts.Completed }
-  ].map(c => `<div class="stat-card"><div class="label">${c.label}</div><div class="stat-value">${c.value}</div></div>`).join("");
-
-  if (!rangeValid) {
-    $("reportBody").innerHTML = `<div class="empty-state">Choose a "From" and "To" date to generate the report.</div>`;
-    return;
-  }
-  if (rows.length === 0) {
-    $("reportBody").innerHTML = `<div class="empty-state"><div class="big">No records in this range</div>Try a wider date range or a different scope.</div>`;
-    return;
+  if (categories.length) {
+    document.getElementById("categoryField").style.display = "";
+    categories.forEach(c => {
+      const opt = document.createElement("option");
+      opt.value = c; opt.textContent = c;
+      categorySelect.appendChild(opt);
+    });
+  } else {
+    document.getElementById("categoryField").style.display = "none";
   }
 
-  const showScopeCol = reportScope === "all";
-  $("reportBody").innerHTML = `
-    <div class="table-scroll">
-      <table>
-        <thead><tr>
-          ${showScopeCol ? "<th>Scope</th>" : ""}
-          <th>Category</th><th>Title</th><th>Status</th><th>Date</th><th>Notes</th>
-        </tr></thead>
-        <tbody>
-          ${rows.map(r => `
-            <tr>
-              ${showScopeCol ? `<td>${escapeHtml(scopeLabel(r.scopeType, r.scopeId))}</td>` : ""}
-              <td>${r.category ? `<span class="tag gold">${escapeHtml(r.category)}</span>` : "—"}</td>
-              <td><strong>${escapeHtml(r.title)}</strong></td>
-              <td><span class="tag">${r.status || "Planned"}</span></td>
-              <td>${r.date || "—"}</td>
-              <td>${escapeHtml(r.description || "—")}</td>
-            </tr>`).join("")}
-        </tbody>
-      </table>
-    </div>
-  `;
+  if (id) {
+    getDoc(doc(db, "records", id)).then(snap => {
+      const r = snap.data();
+      document.getElementById("recTitle").value = r.title || "";
+      document.getElementById("recDescription").value = r.description || "";
+      document.getElementById("recStatus").value = r.status || "Planned";
+      document.getElementById("recDate").value = r.date || "";
+      if (categories.length) categorySelect.value = r.category || categories[0];
+    });
+  } else {
+    document.getElementById("recordForm").reset();
+  }
+  document.getElementById("recordModalBackdrop").classList.add("open");
 }
 
-/* ============================ RECORD MODAL ============================== */
+document.getElementById("recordCancelBtn").addEventListener("click", () => {
+  document.getElementById("recordModalBackdrop").classList.remove("open");
+});
 
-function openRecordModal(scopeType, scopeId, record = null) {
-  editingRecordId = record ? record.id : null;
-  $("recordModalTitle").textContent = record ? "Edit record" : "Add record";
-  $("recordError").style.display = "none";
-
-  const isDept = scopeType === "department";
-  $("categoryField").style.display = isDept ? "block" : "none";
-  if (isDept) {
-    const cats = DEPARTMENTS[scopeId].categories;
-    $("recCategory").innerHTML = cats.map(c => `<option ${record?.category === c ? "selected" : ""}>${c}</option>`).join("");
+document.getElementById("recordForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (!canManageScope(recordsScope.type, recordsScope.id)) {
+    document.getElementById("recordError").textContent = "You cannot manage this scope.";
+    return;
   }
-
-  $("recTitle").value = record?.title || "";
-  $("recDescription").value = record?.description || "";
-  $("recStatus").value = record?.status || "Planned";
-  $("recDate").value = record?.date || "";
-
-  $("recordModalBackdrop").classList.add("open");
-
-  $("recordForm").onsubmit = async (e) => {
-    e.preventDefault();
-    const payload = {
-      scopeType, scopeId,
-      category: isDept ? $("recCategory").value : null,
-      title: $("recTitle").value.trim(),
-      description: $("recDescription").value.trim(),
-      status: $("recStatus").value,
-      date: $("recDate").value,
-      updatedAt: serverTimestamp(),
-      updatedBy: currentUser.email
-    };
-    try {
-      if (editingRecordId) {
-        await updateDoc(doc(db, "records", editingRecordId), payload);
-      } else {
-        await addDoc(collection(db, "records"), {
-          ...payload,
-          createdAt: serverTimestamp(),
-          createdBy: currentUser.email
-        });
-      }
-      closeRecordModal();
-    } catch (err) {
-      $("recordError").textContent = "Couldn't save: " + err.message;
-      $("recordError").style.display = "block";
-    }
+  const payload = {
+    scopeType: recordsScope.type,
+    scopeId: recordsScope.id,
+    category: document.getElementById("categoryField").style.display === "none"
+      ? null : document.getElementById("recCategory").value,
+    title: document.getElementById("recTitle").value.trim(),
+    description: document.getElementById("recDescription").value.trim(),
+    status: document.getElementById("recStatus").value,
+    date: document.getElementById("recDate").value,
+    updatedAt: serverTimestamp()
   };
+  try {
+    if (editingRecordId) {
+      await updateDoc(doc(db, "records", editingRecordId), payload);
+    } else {
+      payload.createdAt = serverTimestamp();
+      payload.createdBy = currentUser.uid;
+      await addDoc(collection(db, "records"), payload);
+    }
+    document.getElementById("recordModalBackdrop").classList.remove("open");
+  } catch (err) {
+    document.getElementById("recordError").textContent = err.message;
+  }
+});
+
+// ---------------------------------------------------------------------
+// REPORTS (read-only summary, scoped)
+// ---------------------------------------------------------------------
+function renderReports() {
+  setPage("Reports", "Status overview");
+  const content = document.getElementById("content");
+  content.innerHTML = `<div id="reportBody">Loading…</div>`;
+
+  const scopes = isSuperAdmin() ? allScopes() : [myScope()];
+  const rq = isSuperAdmin()
+    ? collection(db, "records")
+    : query(collection(db, "records"), where("scopeType", "==", scopes[0].type), where("scopeId", "==", scopes[0].id));
+
+  const unsub = onSnapshot(rq, snap => {
+    const counts = {};
+    scopes.forEach(s => counts[`${s.type}:${s.id}`] = { Planned: 0, Ongoing: 0, Completed: 0 });
+    snap.forEach(d => {
+      const r = d.data();
+      const key = `${r.scopeType}:${r.scopeId}`;
+      if (counts[key]) counts[key][r.status || "Planned"]++;
+    });
+    let html = `<table class="data-table"><thead><tr><th>Scope</th><th>Planned</th><th>Ongoing</th><th>Completed</th></tr></thead><tbody>`;
+    scopes.forEach(s => {
+      const c = counts[`${s.type}:${s.id}`];
+      html += `<tr><td>${scopeLabel(s.type, s.id)}</td><td>${c.Planned}</td><td>${c.Ongoing}</td><td>${c.Completed}</td></tr>`;
+    });
+    html += `</tbody></table>`;
+    document.getElementById("reportBody").innerHTML = html;
+  });
+  unsubscribers.push(unsub);
 }
 
-function closeRecordModal() {
-  $("recordModalBackdrop").classList.remove("open");
-  editingRecordId = null;
+// ---------------------------------------------------------------------
+// CHART OF ACCOUNTS
+// Super Admin: full CRUD across every scope, plus bulk import.
+// Staff: CRUD limited to their own assigned scope only.
+// ---------------------------------------------------------------------
+function renderAccounts() {
+  const actions = `
+    <button class="btn btn-primary" id="addAcctBtn" style="width:auto;">+ Add account</button>
+    ${isSuperAdmin() ? `<button class="btn btn-ghost" id="bulkImportBtn" style="width:auto;">⇪ Bulk import</button>` : ""}
+  `;
+  setPage("Chart of Accounts", isSuperAdmin() ? "All scopes — EPR" : scopeLabel(profile.scopeType, profile.scopeId), actions);
+
+  const content = document.getElementById("content");
+  let scopeFilter = "";
+  if (isSuperAdmin()) {
+    scopeFilter = `<div class="field"><label>Filter by scope</label><select id="acctScopeFilter"><option value="all">All scopes</option></select></div>`;
+  }
+  content.innerHTML = `
+    ${scopeFilter}
+    <table class="data-table">
+      <thead><tr><th>Account name</th><th>Type</th><th>Scope</th><th></th></tr></thead>
+      <tbody id="acctBody"><tr><td colspan="4">Loading…</td></tr></tbody>
+    </table>
+  `;
+
+  if (isSuperAdmin()) {
+    const filter = document.getElementById("acctScopeFilter");
+    allScopesWithHeadOffice().forEach(s => {
+      const opt = document.createElement("option");
+      opt.value = `${s.type}:${s.id}`;
+      opt.textContent = s.label;
+      filter.appendChild(opt);
+    });
+    filter.addEventListener("change", () => loadAccounts(filter.value));
+  }
+
+  document.getElementById("addAcctBtn").addEventListener("click", () => openAccountModal());
+  if (isSuperAdmin()) {
+    document.getElementById("bulkImportBtn").addEventListener("click", openBulkImportModal);
+  }
+
+  loadAccounts(isSuperAdmin() ? "all" : `${profile.scopeType}:${profile.scopeId}`);
 }
-$("recordCancelBtn").addEventListener("click", closeRecordModal);
 
-/* ============================ MANAGE USERS =============================== */
+function loadAccounts(filterValue) {
+  const body = document.getElementById("acctBody");
+  let aq;
+  if (filterValue === "all") {
+    aq = query(collection(db, "accounts"), orderBy("name"));
+  } else {
+    const [type, id] = filterValue.split(":");
+    aq = query(collection(db, "accounts"), where("scopeType", "==", type), where("scopeId", "==", id), orderBy("name"));
+  }
+  const unsub = onSnapshot(aq, snap => {
+    if (snap.empty) { body.innerHTML = `<tr><td colspan="4">No accounts yet.</td></tr>`; return; }
+    body.innerHTML = "";
+    snap.forEach(d => {
+      const a = d.data();
+      const mine = canManageScope(a.scopeType, a.scopeId);
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${escapeHtml(a.name)}</td>
+        <td>${escapeHtml(a.type)}</td>
+        <td>${escapeHtml(scopeLabel(a.scopeType, a.scopeId))}</td>
+        <td>
+          ${mine ? `<button class="btn-icon" data-edit="${d.id}">✎</button>
+                    <button class="btn-icon" data-del="${d.id}">🗑</button>` : `<span class="muted">read-only</span>`}
+        </td>`;
+      body.appendChild(tr);
+    });
+    body.querySelectorAll("[data-edit]").forEach(b =>
+      b.addEventListener("click", () => openAccountModal(b.dataset.edit)));
+    body.querySelectorAll("[data-del]").forEach(b =>
+      b.addEventListener("click", () => deleteAccount(b.dataset.del)));
+  });
+  unsubscribers.push(unsub);
+}
 
+async function deleteAccount(id) {
+  const snap = await getDoc(doc(db, "accounts", id));
+  const a = snap.data();
+  if (!canManageScope(a.scopeType, a.scopeId)) { alert("You cannot manage this scope."); return; }
+  if (!confirm("Delete this account?")) return;
+  await deleteDoc(doc(db, "accounts", id));
+}
+
+let editingAcctId = null;
+
+function openAccountModal(id = null) {
+  editingAcctId = id;
+  document.getElementById("acctError").textContent = "";
+  document.getElementById("acctModalTitle").textContent = id ? "Edit account" : "Add account";
+
+  const typeSelect = document.getElementById("acctType");
+  typeSelect.innerHTML = "";
+  ACCOUNT_TYPES.forEach(t => {
+    const opt = document.createElement("option");
+    opt.value = t; opt.textContent = t;
+    typeSelect.appendChild(opt);
+  });
+
+  const scopeSelect = document.getElementById("acctScope");
+  scopeSelect.innerHTML = "";
+  if (isSuperAdmin()) {
+    allScopesWithHeadOffice().forEach(s => {
+      const opt = document.createElement("option");
+      opt.value = `${s.type}:${s.id}`;
+      opt.textContent = s.label;
+      scopeSelect.appendChild(opt);
+    });
+    scopeSelect.disabled = false;
+  } else {
+    const opt = document.createElement("option");
+    opt.value = `${profile.scopeType}:${profile.scopeId}`;
+    opt.textContent = scopeLabel(profile.scopeType, profile.scopeId);
+    scopeSelect.appendChild(opt);
+    scopeSelect.disabled = true;
+  }
+
+  if (id) {
+    getDoc(doc(db, "accounts", id)).then(snap => {
+      const a = snap.data();
+      document.getElementById("acctName").value = a.name || "";
+      typeSelect.value = a.type;
+      scopeSelect.value = `${a.scopeType}:${a.scopeId}`;
+    });
+  } else {
+    document.getElementById("acctForm").reset();
+    typeSelect.value = ACCOUNT_TYPES[0];
+    if (!isSuperAdmin()) scopeSelect.value = `${profile.scopeType}:${profile.scopeId}`;
+  }
+  document.getElementById("acctModalBackdrop").classList.add("open");
+}
+
+document.getElementById("acctCancelBtn").addEventListener("click", () => {
+  document.getElementById("acctModalBackdrop").classList.remove("open");
+});
+
+document.getElementById("acctForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const [scopeType, scopeId] = document.getElementById("acctScope").value.split(":");
+  if (!canManageScope(scopeType, scopeId)) {
+    document.getElementById("acctError").textContent = "You can only manage accounts in your assigned scope.";
+    return;
+  }
+  const payload = {
+    name: document.getElementById("acctName").value.trim(),
+    type: document.getElementById("acctType").value,
+    scopeType, scopeId,
+    updatedAt: serverTimestamp()
+  };
+  try {
+    if (editingAcctId) {
+      await updateDoc(doc(db, "accounts", editingAcctId), payload);
+    } else {
+      payload.createdAt = serverTimestamp();
+      payload.createdBy = currentUser.uid;
+      await addDoc(collection(db, "accounts"), payload);
+    }
+    document.getElementById("acctModalBackdrop").classList.remove("open");
+  } catch (err) {
+    document.getElementById("acctError").textContent = err.message;
+  }
+});
+
+// --- Bulk import (Super Admin only) ---------------------------------
+function openBulkImportModal() {
+  document.getElementById("bulkImportError").textContent = "";
+  document.getElementById("bulkImportText").value = "";
+  const scopeSelect = document.getElementById("bulkImportScope");
+  scopeSelect.innerHTML = "";
+  allScopesWithHeadOffice().forEach(s => {
+    const opt = document.createElement("option");
+    opt.value = `${s.type}:${s.id}`;
+    opt.textContent = s.label;
+    scopeSelect.appendChild(opt);
+  });
+  document.getElementById("bulkImportModalBackdrop").classList.add("open");
+}
+
+document.getElementById("bulkImportCancelBtn").addEventListener("click", () => {
+  document.getElementById("bulkImportModalBackdrop").classList.remove("open");
+});
+
+document.getElementById("bulkImportForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const errorEl = document.getElementById("bulkImportError");
+  errorEl.textContent = "";
+  const [scopeType, scopeId] = document.getElementById("bulkImportScope").value.split(":");
+  const raw = document.getElementById("bulkImportText").value.trim();
+  if (!raw) { errorEl.textContent = "Paste at least one line."; return; }
+
+  // Expected format per line, copied straight from the QuickBooks export:
+  //   Account name<TAB or multiple spaces>Account type
+  const lines = raw.split("\n").map(l => l.trim()).filter(Boolean);
+  const rows = lines.map(line => {
+    const parts = line.split(/\t+| {2,}/).map(p => p.trim()).filter(Boolean);
+    const type = parts.length > 1 ? parts[parts.length - 1] : "Other Expense";
+    const name = parts.length > 1 ? parts.slice(0, -1).join(" ") : line;
+    return { name, type: ACCOUNT_TYPES.includes(type) ? type : "Other Expense" };
+  }).filter(r => r.name);
+
+  if (!rows.length) { errorEl.textContent = "Couldn't parse any rows."; return; }
+
+  const submitBtn = document.getElementById("bulkImportSubmitBtn");
+  submitBtn.disabled = true;
+  submitBtn.textContent = `Importing 0 / ${rows.length}…`;
+  try {
+    let done = 0;
+    for (const r of rows) {
+      await addDoc(collection(db, "accounts"), {
+        name: r.name,
+        type: r.type,
+        scopeType, scopeId,
+        createdAt: serverTimestamp(),
+        createdBy: currentUser.uid
+      });
+      done++;
+      submitBtn.textContent = `Importing ${done} / ${rows.length}…`;
+    }
+    document.getElementById("bulkImportModalBackdrop").classList.remove("open");
+  } catch (err) {
+    errorEl.textContent = err.message;
+  } finally {
+    submitBtn.disabled = false;
+    submitBtn.textContent = "Import accounts";
+  }
+});
+
+// ---------------------------------------------------------------------
+// MANAGE USERS (Super Admin only)
+// ---------------------------------------------------------------------
 function renderUsers() {
-  $("pageTitle").textContent = "Manage staff accounts";
-  $("pageCrumb").textContent = "Create accounts and assign each person to one department or presbytery";
-  $("pageActions").innerHTML = `<button class="btn btn-primary" style="width:auto;" id="addUserBtn">+ Add staff account</button>`;
-  $("addUserBtn").addEventListener("click", () => openUserModal());
-
-  $("content").innerHTML = `
-    <div class="panel">
-      <div class="panel-head"><h2>All accounts</h2></div>
-      <div class="panel-body" id="usersBody"><div class="empty-state">Loading…</div></div>
-    </div>
+  setPage("Manage Users", "Staff accounts", `
+    <button class="btn btn-primary" id="addUserBtn" style="width:auto;">+ Add staff account</button>
+  `);
+  const content = document.getElementById("content");
+  content.innerHTML = `
+    <table class="data-table">
+      <thead><tr><th>Name</th><th>Email</th><th>Access</th><th>Scope</th><th></th></tr></thead>
+      <tbody id="usersBody"><tr><td colspan="5">Loading…</td></tr></tbody>
+    </table>
   `;
+  document.getElementById("addUserBtn").addEventListener("click", () => openUserModal());
 
-  unsubscribeUsers = onSnapshot(collection(db, "users"), (snap) => {
-    const rows = [];
-    snap.forEach(d => rows.push({ id: d.id, ...d.data() }));
-    rows.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
-    paintUsers(rows);
+  const unsub = onSnapshot(collection(db, "users"), snap => {
+    if (snap.empty) { document.getElementById("usersBody").innerHTML = `<tr><td colspan="5">No staff yet.</td></tr>`; return; }
+    const body = document.getElementById("usersBody");
+    body.innerHTML = "";
+    snap.forEach(d => {
+      const u = d.data();
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${escapeHtml(u.name)}</td>
+        <td>${escapeHtml(u.email)}</td>
+        <td>${u.role === "superadmin" ? "Super Admin" : "Staff"}</td>
+        <td>${u.role === "superadmin" ? "—" : escapeHtml(scopeLabel(u.scopeType, u.scopeId))}</td>
+        <td>
+          <button class="btn-icon" data-edit="${d.id}">✎</button>
+          ${d.id !== currentUser.uid ? `<button class="btn-icon" data-del="${d.id}">🗑</button>` : ""}
+        </td>`;
+      body.appendChild(tr);
+    });
+    body.querySelectorAll("[data-edit]").forEach(b =>
+      b.addEventListener("click", () => openUserModal(b.dataset.edit)));
+    body.querySelectorAll("[data-del]").forEach(b =>
+      b.addEventListener("click", () => deleteUser(b.dataset.del)));
   });
+  unsubscribers.push(unsub);
 }
 
-function paintUsers(rows) {
-  const body = $("usersBody");
-  if (rows.length === 0) {
-    body.innerHTML = `<div class="empty-state">No staff accounts yet.</div>`;
-    return;
-  }
-  body.innerHTML = `
-    <div class="table-scroll">
-      <table>
-        <thead><tr><th>Name</th><th>Email</th><th>Access</th><th>Assigned to</th><th></th></tr></thead>
-        <tbody>
-          ${rows.map(u => `
-            <tr>
-              <td><strong>${escapeHtml(u.name || "—")}</strong></td>
-              <td>${escapeHtml(u.email || "—")}</td>
-              <td><span class="badge-role ${u.role === "superadmin" ? "super" : ""}">${u.role === "superadmin" ? "Super Admin" : "Staff"}</span></td>
-              <td>${u.role === "superadmin" ? "All departments" : scopeLabel(u.scopeType, u.scopeId)}</td>
-              <td class="row-actions">
-                <button class="btn btn-ghost btn-sm" data-edit="${u.id}">Edit</button>
-                ${u.id !== currentUser.uid ? `<button class="btn btn-danger btn-sm" data-del="${u.id}">Revoke</button>` : ""}
-              </td>
-            </tr>`).join("")}
-        </tbody>
-      </table>
-    </div>
-  `;
-
-  body.querySelectorAll("[data-edit]").forEach(btn => {
-    btn.addEventListener("click", () => {
-      const u = rows.find(r => r.id === btn.dataset.edit);
-      openUserModal(u);
-    });
-  });
-  body.querySelectorAll("[data-del]").forEach(btn => {
-    btn.addEventListener("click", async () => {
-      if (confirm("Revoke this person's access? Their login will stop working immediately. (Their sign-in credentials still exist in Firebase Auth — remove those separately in the Firebase console if needed.)")) {
-        await deleteDoc(doc(db, "users", btn.dataset.del));
-      }
-    });
-  });
+async function deleteUser(uid) {
+  if (!confirm("Remove this staff account's profile? (Their sign-in login will still exist until removed in Firebase Auth.)")) return;
+  await deleteDoc(doc(db, "users", uid));
 }
 
-function openUserModal(user = null) {
-  editingUserId = user ? user.id : null;
-  $("userModalTitle").textContent = user ? "Edit staff account" : "Add staff account";
-  $("userError").style.display = "none";
+let editingUserId = null;
 
-  $("uScope").innerHTML = allScopes().map(s =>
-    `<option value="${s.type}:${s.id}" ${user?.scopeType === s.type && user?.scopeId === s.id ? "selected" : ""}>${s.label}</option>`
-  ).join("");
+function openUserModal(uid = null) {
+  editingUserId = uid;
+  document.getElementById("userError").textContent = "";
+  document.getElementById("userModalTitle").textContent = uid ? "Edit staff account" : "Add staff account";
+  document.getElementById("uEmailField").style.display = uid ? "none" : "";
+  document.getElementById("uPasswordField").style.display = uid ? "none" : "";
 
-  $("uName").value = user?.name || "";
-  $("uEmail").value = user?.email || "";
-  $("uPassword").value = "";
-  $("uRole").value = user?.role || "staff";
+  const scopeSelect = document.getElementById("uScope");
+  scopeSelect.innerHTML = "";
+  allScopes().forEach(s => {
+    const opt = document.createElement("option");
+    opt.value = `${s.type}:${s.id}`;
+    opt.textContent = s.label;
+    scopeSelect.appendChild(opt);
+  });
 
-  // Editing an existing account: email/password are fixed in Firebase Auth,
-  // only role/scope/name can change from this screen.
-  const isEditing = !!user;
-  $("uEmailField").style.display = isEditing ? "none" : "block";
-  $("uPasswordField").style.display = isEditing ? "none" : "block";
-  $("uEmail").required = !isEditing;
-
-  toggleScopeVisibility();
-  $("uRole").onchange = toggleScopeVisibility;
-  function toggleScopeVisibility() {
-    $("uScopeField").style.display = $("uRole").value === "superadmin" ? "none" : "block";
-  }
-
-  $("userModalBackdrop").classList.add("open");
-
-  $("userForm").onsubmit = async (e) => {
-    e.preventDefault();
-    const role = $("uRole").value;
-    const [scopeType, scopeId] = role === "superadmin" ? [null, null] : $("uScope").value.split(":");
-    const name = $("uName").value.trim();
-
-    try {
-      if (isEditing) {
-        await updateDoc(doc(db, "users", editingUserId), { name, role, scopeType, scopeId });
-      } else {
-        const email = $("uEmail").value.trim();
-        const password = $("uPassword").value;
-        if (password.length < 6) throw new Error("Password must be at least 6 characters.");
-
-        // Created through the secondary app instance so the Super Admin's
-        // own session in the primary app is not replaced.
-        const cred = await createUserWithEmailAndPassword(secondaryAuth, email, password);
-        await setDoc(doc(db, "users", cred.user.uid), {
-          name, email, role, scopeType, scopeId,
-          createdAt: serverTimestamp(),
-          createdBy: currentUser.email
-        });
-        await signOut(secondaryAuth);
-      }
-      closeUserModal();
-    } catch (err) {
-      const map = {
-        "auth/email-already-in-use": "That email already has an account.",
-        "auth/invalid-email": "Enter a valid email address.",
-        "auth/weak-password": "Password must be at least 6 characters."
-      };
-      $("userError").textContent = map[err.code] || err.message;
-      $("userError").style.display = "block";
-    }
+  const roleSelect = document.getElementById("uRole");
+  const toggleScopeVisibility = () => {
+    document.getElementById("uScopeField").style.display = roleSelect.value === "superadmin" ? "none" : "";
   };
+  roleSelect.onchange = toggleScopeVisibility;
+
+  if (uid) {
+    getDoc(doc(db, "users", uid)).then(snap => {
+      const u = snap.data();
+      document.getElementById("uName").value = u.name || "";
+      roleSelect.value = u.role;
+      if (u.role !== "superadmin") scopeSelect.value = `${u.scopeType}:${u.scopeId}`;
+      toggleScopeVisibility();
+    });
+  } else {
+    document.getElementById("userForm").reset();
+    toggleScopeVisibility();
+  }
+  document.getElementById("userModalBackdrop").classList.add("open");
 }
 
-function closeUserModal() {
-  $("userModalBackdrop").classList.remove("open");
-  editingUserId = null;
-}
-$("userCancelBtn").addEventListener("click", closeUserModal);
+document.getElementById("userCancelBtn").addEventListener("click", () => {
+  document.getElementById("userModalBackdrop").classList.remove("open");
+});
 
-/* =============================== HELPERS ================================ */
+document.getElementById("userForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const errorEl = document.getElementById("userError");
+  errorEl.textContent = "";
+  const role = document.getElementById("uRole").value;
+  const [scopeType, scopeId] = role === "superadmin"
+    ? [null, null]
+    : document.getElementById("uScope").value.split(":");
+  const name = document.getElementById("uName").value.trim();
 
+  try {
+    if (editingUserId) {
+      await updateDoc(doc(db, "users", editingUserId), { name, role, scopeType, scopeId });
+      document.getElementById("userModalBackdrop").classList.remove("open");
+      return;
+    }
+    const email = document.getElementById("uEmail").value.trim();
+    const password = document.getElementById("uPassword").value;
+    if (!password || password.length < 6) {
+      errorEl.textContent = "Temporary password must be at least 6 characters.";
+      return;
+    }
+    // Created through the secondary Firebase app instance so the admin's
+    // own session is not replaced by the new user's session.
+    const cred = await createUserWithEmailAndPassword(secondaryAuth, email, password);
+    await setDoc(doc(db, "users", cred.user.uid), {
+      name, email, role, scopeType, scopeId,
+      createdAt: serverTimestamp(), createdBy: currentUser.uid
+    });
+    await signOut(secondaryAuth);
+    document.getElementById("userModalBackdrop").classList.remove("open");
+  } catch (err) {
+    errorEl.textContent = err.message;
+  }
+});
+
+// ---------------------------------------------------------------------
+// HELPERS
+// ---------------------------------------------------------------------
 function escapeHtml(str) {
-  return String(str).replace(/[&<>"']/g, (c) => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
-  }[c]));
+  if (str === undefined || str === null) return "";
+  return String(str)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
