@@ -40,6 +40,32 @@ export const PRESBYTERIES = {
   gisenyi: { name: "EPR Presbytery Gisenyi" }
 };
 
+// A pseudo-scope for accounts that belong to EPR Head Office / General ledger
+// rather than to one specific department or presbytery (e.g. "E.P.R./GENERAL(EURO)").
+export const HEAD_OFFICE_SCOPE = {
+  type: "headoffice",
+  id: "headoffice",
+  label: "EPR Head Office / General"
+};
+
+// The account "Type" values used across the EPR Chart of Accounts
+// (taken directly from the QuickBooks export). Kept as a flat list so the
+// Chart of Accounts form can render a single <select>, grouped visually
+// in the UI layer if desired.
+export const ACCOUNT_TYPES = [
+  "Bank",
+  "Accounts Receivable",
+  "Other Current Asset",
+  "Fixed Asset",
+  "Accounts Payable",
+  "Other Current Liability",
+  "Long Term Liability",
+  "Equity",
+  "Income",
+  "Expense",
+  "Other Expense"
+];
+
 // Every scope (department or presbytery) a staff account can be tied to,
 // used to populate the "assign role" dropdown in the Manage Users screen.
 export function allScopes() {
@@ -53,8 +79,16 @@ export function allScopes() {
   return scopes;
 }
 
+// Same as allScopes() but with the Head Office / General option prepended.
+// Used by the Chart of Accounts form, since some accounts aren't tied to a
+// specific department or presbytery.
+export function allScopesWithHeadOffice() {
+  return [HEAD_OFFICE_SCOPE, ...allScopes()];
+}
+
 export function scopeLabel(scopeType, scopeId) {
   if (scopeType === "department") return DEPARTMENTS[scopeId]?.name || scopeId;
   if (scopeType === "presbytery") return PRESBYTERIES[scopeId]?.name || scopeId;
+  if (scopeType === "headoffice") return HEAD_OFFICE_SCOPE.label;
   return "—";
 }
