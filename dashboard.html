@@ -5,26 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>EPR Management System</title>
 <link rel="stylesheet" href="css/styles.css">
-<style>
-  /* --- Additions to support Chart of Accounts / tables / modals ---
-     Move these into css/styles.css whenever convenient; they're inlined
-     here so the new feature works even before you touch your stylesheet. */
-  .modal-backdrop{display:none;}
-  .modal-backdrop.open{display:flex;align-items:center;justify-content:center;}
-  .nav-item.active{font-weight:600;background:rgba(29,143,225,0.12);}
-  .grid-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px;}
-  .card{border:1px solid #e5e7eb;border-radius:10px;padding:16px;}
-  .card h3{margin:0 0 8px;font-size:13px;color:#6b7280;font-weight:600;text-transform:uppercase;}
-  .card p{margin:0;font-size:28px;font-weight:700;}
-  .data-table{width:100%;border-collapse:collapse;margin-top:12px;}
-  .data-table th,.data-table td{text-align:left;padding:10px 12px;border-bottom:1px solid #eef0f2;font-size:14px;}
-  .badge{background:#eef2ff;color:#1D8FE1;padding:2px 8px;border-radius:999px;font-size:12px;}
-  .btn-icon{border:none;background:none;cursor:pointer;font-size:15px;padding:4px 6px;}
-  .muted{color:#9ca3af;font-size:12px;}
-  .field{margin-bottom:12px;}
-</style>
 </head>
 <body>
+
 <div class="shell">
   <aside class="sidebar" id="sidebar">
     <div class="brand"><div class="mark">EPR</div><span>EPR System</span></div>
@@ -40,6 +23,7 @@
       <button class="nav-item" id="logoutBtn">↩ Sign out</button>
     </div>
   </aside>
+
   <main class="main" id="main">
     <div class="topbar">
       <div>
@@ -52,7 +36,7 @@
   </main>
 </div>
 
-<!-- Record add/edit modal (Departments & Presbyteries activity records) -->
+<!-- Record add/edit modal -->
 <div class="modal-backdrop" id="recordModalBackdrop">
   <div class="modal">
     <h3 id="recordModalTitle">Add record</h3>
@@ -122,55 +106,6 @@
       <div class="actions">
         <button type="button" class="btn btn-ghost" id="userCancelBtn">Cancel</button>
         <button type="submit" class="btn btn-primary" id="userSaveBtn" style="width:auto;">Save account</button>
-      </div>
-    </form>
-  </div>
-</div>
-
-<!-- Chart of Accounts add/edit modal -->
-<div class="modal-backdrop" id="acctModalBackdrop">
-  <div class="modal">
-    <h3 id="acctModalTitle">Add account</h3>
-    <div class="error-msg" id="acctError"></div>
-    <form id="acctForm">
-      <div class="field">
-        <label for="acctName">Account name</label>
-        <input type="text" id="acctName" required placeholder="e.g. BK-EPR Presbytery Kigali">
-      </div>
-      <div class="field">
-        <label for="acctType">Account type</label>
-        <select id="acctType"></select>
-      </div>
-      <div class="field">
-        <label for="acctScope">Scope</label>
-        <select id="acctScope"></select>
-      </div>
-      <div class="actions">
-        <button type="button" class="btn btn-ghost" id="acctCancelBtn">Cancel</button>
-        <button type="submit" class="btn btn-primary" id="acctSaveBtn" style="width:auto;">Save account</button>
-      </div>
-    </form>
-  </div>
-</div>
-
-<!-- Chart of Accounts bulk import modal (Super Admin only) -->
-<div class="modal-backdrop" id="bulkImportModalBackdrop">
-  <div class="modal">
-    <h3>Bulk import accounts</h3>
-    <div class="error-msg" id="bulkImportError"></div>
-    <form id="bulkImportForm">
-      <div class="field">
-        <label for="bulkImportScope">Import into scope</label>
-        <select id="bulkImportScope"></select>
-      </div>
-      <div class="field">
-        <label for="bulkImportText">Paste accounts (one per line: "Account name" then "Type" — exactly as exported from QuickBooks)</label>
-        <textarea id="bulkImportText" rows="10" placeholder="BK-EPR Presbytery Kigali	Bank
-Accounts receivable-Kigali	Accounts Receivable"></textarea>
-      </div>
-      <div class="actions">
-        <button type="button" class="btn btn-ghost" id="bulkImportCancelBtn">Cancel</button>
-        <button type="submit" class="btn btn-primary" id="bulkImportSubmitBtn" style="width:auto;">Import accounts</button>
       </div>
     </form>
   </div>
