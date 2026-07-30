@@ -6,17 +6,24 @@ import {
   doc, getDoc, setDoc, updateDoc, deleteDoc,
   addDoc, collection, query, where, onSnapshot, serverTimestamp
 } from "./firebase-config.js";
-import { DEPARTMENTS, PRESBYTERIES, allScopes, scopeLabel } from "./structure.js";
+import {
+  DEPARTMENTS, PRESBYTERIES, allScopes, scopeLabel,
+  ACCOUNT_TYPES, accountTypeLabel, accountTypeColor
+} from "./structure.js";
 
 let currentUser = null;     // { uid, email }
 let profile = null;         // { name, email, role, scopeType, scopeId }
 let unsubscribeRecords = null;
 let unsubscribeUsers = null;
 let unsubscribeReports = null;
+let unsubscribeAccounts = null;
 let cachedRecords = [];
+let cachedAccounts = [];
 let activeCategory = "All";
+let activeAccountType = "All";
 let editingRecordId = null;
 let editingUserId = null;
+let editingAccountId = null;
 
 // Reports state — persists while navigating so filters don't reset every click
 let reportScope = "all";        // "all" | "department:<id>" | "presbytery:<id>"
@@ -79,6 +86,7 @@ function buildSidebar() {
   if (profile.role === "superadmin") {
     nav.appendChild(navItem("Overview", "#/overview"));
     nav.appendChild(navItem("Reports", "#/reports"));
+    nav.appendChild(navItem("Chart of Accounts", "#/accounts"));
 
     nav.appendChild(sectionLabel("Departments"));
     for (const [id, d] of Object.entries(DEPARTMENTS)) {
@@ -93,10 +101,12 @@ function buildSidebar() {
     nav.appendChild(sectionLabel("Administration"));
     nav.appendChild(navItem("Manage staff accounts", "#/users"));
   } else {
-    // A department/presbytery user only ever sees their own scope + reports.
+    // A department/presbytery user only ever sees their own scope + reports
+    // + the (read-only) chart of accounts.
     const label = scopeLabel(profile.scopeType, profile.scopeId);
     nav.appendChild(navItem(label, `#/${profile.scopeType}/${profile.scopeId}`));
     nav.appendChild(navItem("Reports", "#/reports"));
+    nav.appendChild(navItem("Chart of Accounts", "#/accounts"));
   }
 }
 
@@ -131,10 +141,12 @@ function route() {
   const parts = location.hash.replace("#/", "").split("/");
   const [scopeType, scopeId] = parts;
 
-  // Guard: staff can only ever view their own assigned scope (Reports is exempt —
-  // everyone may see reports, staff just can't pick a different scope inside it).
+  // Guard: staff can only ever view their own assigned scope. Reports and
+  // Chart of Accounts are exempt — everyone may see them, staff just can't
+  // pick a different scope inside Reports, and can't edit accounts.
   if (profile.role !== "superadmin") {
-    if (scopeType !== "reports" && (scopeType !== profile.scopeType || scopeId !== profile.scopeId)) {
+    const exempt = scopeType === "reports" || scopeType === "accounts";
+    if (!exempt && (scopeType !== profile.scopeType || scopeId !== profile.scopeId)) {
       location.hash = `#/${profile.scopeType}/${profile.scopeId}`;
       return;
     }
@@ -144,6 +156,8 @@ function route() {
     renderOverview();
   } else if (scopeType === "reports") {
     renderReports();
+  } else if (scopeType === "accounts") {
+    renderAccounts();
   } else if (scopeType === "users" && profile.role === "superadmin") {
     renderUsers();
   } else if (scopeType === "department" && DEPARTMENTS[scopeId]) {
@@ -159,6 +173,7 @@ function cleanupListeners() {
   if (unsubscribeRecords) { unsubscribeRecords(); unsubscribeRecords = null; }
   if (unsubscribeUsers) { unsubscribeUsers(); unsubscribeUsers = null; }
   if (unsubscribeReports) { unsubscribeReports(); unsubscribeReports = null; }
+  if (unsubscribeAccounts) { unsubscribeAccounts(); unsubscribeAccounts = null; }
 }
 
 /* ============================== OVERVIEW ================================ */
@@ -596,6 +611,166 @@ function closeRecordModal() {
   editingRecordId = null;
 }
 $("recordCancelBtn").addEventListener("click", closeRecordModal);
+
+/* =========================== CHART OF ACCOUNTS ============================ */
+// A single, global list of accounts (Asset / Liability / Equity / Income /
+// Expense) stored in the "accounts" Firestore collection. Everyone can view
+// it (useful when reconciling records against a report); only the Super
+// Admin can add, edit, or delete accounts.
+
+function renderAccounts() {
+  const isAdmin = profile.role === "superadmin";
+  activeAccountType = "All";
+
+  $("pageTitle").textContent = "Chart of Accounts";
+  $("pageCrumb").textContent = isAdmin
+    ? "Create and manage the accounts used across EPR"
+    : "View the accounts used across EPR (read-only)";
+  $("pageActions").innerHTML = isAdmin
+    ? `<button class="btn btn-primary" style="width:auto;" id="addAccountBtn">+ Add account</button>`
+    : "";
+  if (isAdmin) $("addAccountBtn").addEventListener("click", () => openAccountModal());
+
+  const typeChips = ["All", ...Object.keys(ACCOUNT_TYPES)];
+  $("content").innerHTML = `
+    <div class="chips" id="accountTypeChips" style="margin-bottom:18px;">
+      ${typeChips.map(t => `
+        <button type="button" class="chip ${t === "All" ? "active" : ""}" data-type="${t}">
+          ${t === "All" ? "All" : accountTypeLabel(t)}
+        </button>
+      `).join("")}
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h2>Accounts</h2></div>
+      <div class="panel-body" id="accountsBody">
+        <div class="empty-state">Loading…</div>
+      </div>
+    </div>
+  `;
+
+  document.querySelectorAll("#accountTypeChips .chip").forEach(chip => {
+    chip.addEventListener("click", () => {
+      activeAccountType = chip.dataset.type;
+      document.querySelectorAll("#accountTypeChips .chip").forEach(c => c.classList.remove("active"));
+      chip.classList.add("active");
+      paintAccounts(isAdmin);
+    });
+  });
+
+  unsubscribeAccounts = onSnapshot(collection(db, "accounts"), (snap) => {
+    cachedAccounts = [];
+    snap.forEach(d => cachedAccounts.push({ id: d.id, ...d.data() }));
+    cachedAccounts.sort((a, b) => (a.code || "").localeCompare(b.code || ""));
+    paintAccounts(isAdmin);
+  }, (err) => {
+    $("accountsBody").innerHTML = `<div class="empty-state">Couldn't load accounts. ${err.message}</div>`;
+  });
+}
+
+function paintAccounts(isAdmin) {
+  const body = $("accountsBody");
+  if (!body) return; // navigated away before this ran
+
+  const rows = activeAccountType === "All"
+    ? cachedAccounts
+    : cachedAccounts.filter(a => a.type === activeAccountType);
+
+  if (rows.length === 0) {
+    body.innerHTML = `<div class="empty-state"><div class="big">No accounts yet</div>${
+      isAdmin ? "Add your first account using the button above." : "Check back once accounts have been set up."
+    }</div>`;
+    return;
+  }
+
+  body.innerHTML = `
+    <div class="table-scroll">
+      <table>
+        <thead><tr>
+          <th>Code</th><th>Name</th><th>Type</th><th>Description</th>${isAdmin ? "<th></th>" : ""}
+        </tr></thead>
+        <tbody>
+          ${rows.map(a => `
+            <tr>
+              <td><strong>${escapeHtml(a.code || "—")}</strong></td>
+              <td>${escapeHtml(a.name)}</td>
+              <td><span class="tag" style="background:${accountTypeColor(a.type)}22;color:${accountTypeColor(a.type)};border-color:${accountTypeColor(a.type)}55;">${accountTypeLabel(a.type)}</span></td>
+              <td>${escapeHtml(a.description || "—")}</td>
+              ${isAdmin ? `
+                <td class="row-actions">
+                  <button class="btn btn-ghost btn-sm" data-edit="${a.id}">Edit</button>
+                  <button class="btn btn-danger btn-sm" data-del="${a.id}">Delete</button>
+                </td>` : ""}
+            </tr>`).join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+
+  if (!isAdmin) return;
+
+  body.querySelectorAll("[data-edit]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const acct = cachedAccounts.find(a => a.id === btn.dataset.edit);
+      openAccountModal(acct);
+    });
+  });
+  body.querySelectorAll("[data-del]").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      if (confirm("Delete this account? This cannot be undone.")) {
+        await deleteDoc(doc(db, "accounts", btn.dataset.del));
+      }
+    });
+  });
+}
+
+function openAccountModal(account = null) {
+  editingAccountId = account ? account.id : null;
+  $("accountModalTitle").textContent = account ? "Edit account" : "Add account";
+  $("accountError").style.display = "none";
+
+  $("acctType").innerHTML = Object.entries(ACCOUNT_TYPES).map(([id, t]) =>
+    `<option value="${id}" ${account?.type === id ? "selected" : ""}>${t.label}</option>`
+  ).join("");
+
+  $("acctCode").value = account?.code || "";
+  $("acctName").value = account?.name || "";
+  $("acctDescription").value = account?.description || "";
+
+  $("accountModalBackdrop").classList.add("open");
+
+  $("accountForm").onsubmit = async (e) => {
+    e.preventDefault();
+    const payload = {
+      code: $("acctCode").value.trim(),
+      name: $("acctName").value.trim(),
+      type: $("acctType").value,
+      description: $("acctDescription").value.trim(),
+      updatedAt: serverTimestamp(),
+      updatedBy: currentUser.email
+    };
+    try {
+      if (editingAccountId) {
+        await updateDoc(doc(db, "accounts", editingAccountId), payload);
+      } else {
+        await addDoc(collection(db, "accounts"), {
+          ...payload,
+          createdAt: serverTimestamp(),
+          createdBy: currentUser.email
+        });
+      }
+      closeAccountModal();
+    } catch (err) {
+      $("accountError").textContent = "Couldn't save: " + err.message;
+      $("accountError").style.display = "block";
+    }
+  };
+}
+
+function closeAccountModal() {
+  $("accountModalBackdrop").classList.remove("open");
+  editingAccountId = null;
+}
+$("accountCancelBtn").addEventListener("click", closeAccountModal);
 
 /* ============================ MANAGE USERS =============================== */
 
