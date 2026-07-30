@@ -39,6 +39,26 @@ export const PRESBYTERIES = {
   gisenyi: { name: "EPR Presbytery Gisenyi" }
 };
 
+// The five standard accounting classifications used by the Chart of
+// Accounts screen. Each has a label (shown in the UI) and a color (used for
+// the little type badge). Add a new type here and it shows up everywhere —
+// the add/edit form, the table badges, and the filter chips.
+export const ACCOUNT_TYPES = {
+  asset: { label: "Asset", color: "#1D8FE1" },
+  liability: { label: "Liability", color: "#D64545" },
+  equity: { label: "Equity", color: "#6B4FA0" },
+  income: { label: "Income", color: "#1E9E64" },
+  expense: { label: "Expense", color: "#C98A1E" }
+};
+
+export function accountTypeLabel(type) {
+  return ACCOUNT_TYPES[type]?.label || type || "—";
+}
+
+export function accountTypeColor(type) {
+  return ACCOUNT_TYPES[type]?.color || "#7a8291";
+}
+
 // Every scope (department or presbytery) a staff account can be tied to,
 // used to populate the "assign role" dropdown in the Manage Users screen.
 export function allScopes() {
