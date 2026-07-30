@@ -7,7 +7,6 @@
 <link rel="stylesheet" href="css/styles.css">
 </head>
 <body>
-
 <div class="shell">
   <aside class="sidebar" id="sidebar">
     <div class="brand"><div class="mark">EPR</div><span>EPR System</span></div>
@@ -23,7 +22,6 @@
       <button class="nav-item" id="logoutBtn">↩ Sign out</button>
     </div>
   </aside>
-
   <main class="main" id="main">
     <div class="topbar">
       <div>
@@ -35,7 +33,6 @@
     <div id="content"></div>
   </main>
 </div>
-
 <!-- Record add/edit modal -->
 <div class="modal-backdrop" id="recordModalBackdrop">
   <div class="modal">
@@ -73,7 +70,6 @@
     </form>
   </div>
 </div>
-
 <!-- Staff add/edit modal -->
 <div class="modal-backdrop" id="userModalBackdrop">
   <div class="modal">
@@ -110,7 +106,35 @@
     </form>
   </div>
 </div>
-
+<!-- Chart of Accounts add/edit modal -->
+<div class="modal-backdrop" id="accountModalBackdrop">
+  <div class="modal">
+    <h3 id="accountModalTitle">Add account</h3>
+    <div class="error-msg" id="accountError"></div>
+    <form id="accountForm">
+      <div class="field">
+        <label for="acctCode">Account code</label>
+        <input type="text" id="acctCode" required placeholder="e.g. 1000">
+      </div>
+      <div class="field">
+        <label for="acctName">Account name</label>
+        <input type="text" id="acctName" required placeholder="e.g. Cash at bank">
+      </div>
+      <div class="field">
+        <label for="acctType">Type</label>
+        <select id="acctType"></select>
+      </div>
+      <div class="field">
+        <label for="acctDescription">Description</label>
+        <textarea id="acctDescription" rows="3" placeholder="Optional details"></textarea>
+      </div>
+      <div class="actions">
+        <button type="button" class="btn btn-ghost" id="accountCancelBtn">Cancel</button>
+        <button type="submit" class="btn btn-primary" id="accountSaveBtn" style="width:auto;">Save account</button>
+      </div>
+    </form>
+  </div>
+</div>
 <script type="module" src="js/app.js"></script>
 </body>
 </html>
