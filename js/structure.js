@@ -1,6 +1,9 @@
 // js/structure.js
-// This is the single source of truth for the EPR org chart.
-// Add/rename a department or presbytery here and the whole app updates.
+// This is the single source of truth for the EPR org chart AND for the
+// tailored field definitions used by every finance module (Invoices, Bills,
+// Record Expense, Record Income, Customers, Suppliers, Inventory, Projects,
+// Make Budget). Add/rename anything here and the whole app updates.
+
 export const DEPARTMENTS = {
   church_growth: {
     name: "Department of Church Growth",
@@ -40,9 +43,7 @@ export const PRESBYTERIES = {
 };
 
 // The five standard accounting classifications used by the Chart of
-// Accounts screen. Each has a label (shown in the UI) and a color (used for
-// the little type badge). Add a new type here and it shows up everywhere —
-// the add/edit form, the table badges, and the filter chips.
+// Accounts screen.
 export const ACCOUNT_TYPES = {
   asset: { label: "Asset", color: "#1D8FE1" },
   liability: { label: "Liability", color: "#D64545" },
@@ -54,13 +55,10 @@ export const ACCOUNT_TYPES = {
 export function accountTypeLabel(type) {
   return ACCOUNT_TYPES[type]?.label || type || "—";
 }
-
 export function accountTypeColor(type) {
   return ACCOUNT_TYPES[type]?.color || "#7a8291";
 }
 
-// Every scope (department or presbytery) a staff account can be tied to,
-// used to populate the "assign role" dropdown in the Manage Users screen.
 export function allScopes() {
   const scopes = [];
   for (const [id, d] of Object.entries(DEPARTMENTS)) {
@@ -78,9 +76,151 @@ export function scopeLabel(scopeType, scopeId) {
   return "—";
 }
 
-// Categories for a given scope. Presbyteries have no sub-categories of their
-// own (records are just tagged with the presbytery), departments do.
 export function categoriesFor(scopeType, scopeId) {
   if (scopeType === "department") return DEPARTMENTS[scopeId]?.categories || [];
   return [];
 }
+
+/* ============================================================================
+   FINANCE MODULES
+   Each entry describes one generic CRUD module: its Firestore collection,
+   its singular/plural labels, and the tailored fields shown in its form.
+   The generic engine in app.js (renderModule / openModuleModal) reads this
+   config to build the table and the add/edit form automatically — add a
+   field here and it appears in the UI with no other code changes.
+
+   Field "type": text | email | number | date | textarea | select
+   Field "format": "currency" (renders formatted with RWF suffix in tables)
+   Field "badge": true (renders as a colored tag in the table, for statuses)
+   ============================================================================ */
+
+export const MODULES = {
+  expenses: {
+    name: "Record Expense",
+    singular: "expense",
+    collection: "expenses",
+    fields: [
+      { key: "date", label: "Date", type: "date", required: true },
+      { key: "vendor", label: "Paid to (vendor)", type: "text", required: true },
+      {
+        key: "category", label: "Expense category", type: "select", required: true,
+        options: ["Functioning", "Information", "Project", "Salaries", "Utilities", "Transport", "Maintenance", "Other"]
+      },
+      {
+        key: "paymentMethod", label: "Payment method", type: "select",
+        options: ["Cash", "Bank Transfer", "Mobile Money", "Cheque"]
+      },
+      { key: "amount", label: "Amount (RWF)", type: "number", required: true, format: "currency" },
+      { key: "notes", label: "Notes", type: "textarea" }
+    ],
+    listColumns: ["date", "vendor", "category", "paymentMethod", "amount"]
+  },
+
+  income: {
+    name: "Record Income",
+    singular: "income record",
+    collection: "income",
+    fields: [
+      { key: "date", label: "Date", type: "date", required: true },
+      { key: "source", label: "Received from", type: "text", required: true },
+      {
+        key: "category", label: "Income category", type: "select", required: true,
+        options: ["Tithe", "Offering", "Donation", "Grant", "Project Income", "Interest", "Other"]
+      },
+      {
+        key: "paymentMethod", label: "Payment method", type: "select",
+        options: ["Cash", "Bank Transfer", "Mobile Money", "Cheque"]
+      },
+      { key: "amount", label: "Amount (RWF)", type: "number", required: true, format: "currency" },
+      { key: "notes", label: "Notes", type: "textarea" }
+    ],
+    listColumns: ["date", "source", "category", "paymentMethod", "amount"]
+  },
+
+  customers: {
+    name: "Customers",
+    singular: "customer",
+    collection: "customers",
+    fields: [
+      { key: "name", label: "Customer name", type: "text", required: true },
+      { key: "contactPerson", label: "Contact person", type: "text" },
+      { key: "phone", label: "Phone", type: "text" },
+      { key: "email", label: "Email", type: "email" },
+      { key: "address", label: "Address", type: "text" },
+      { key: "notes", label: "Notes", type: "textarea" }
+    ],
+    listColumns: ["name", "contactPerson", "phone", "email"]
+  },
+
+  suppliers: {
+    name: "Suppliers",
+    singular: "supplier",
+    collection: "suppliers",
+    fields: [
+      { key: "name", label: "Supplier name", type: "text", required: true },
+      { key: "contactPerson", label: "Contact person", type: "text" },
+      { key: "phone", label: "Phone", type: "text" },
+      { key: "email", label: "Email", type: "email" },
+      { key: "address", label: "Address", type: "text" },
+      { key: "notes", label: "Notes", type: "textarea" }
+    ],
+    listColumns: ["name", "contactPerson", "phone", "email"]
+  },
+
+  inventory: {
+    name: "Inventory",
+    singular: "inventory item",
+    collection: "inventory",
+    fields: [
+      { key: "itemName", label: "Item name", type: "text", required: true },
+      { key: "sku", label: "SKU / code", type: "text" },
+      { key: "category", label: "Category", type: "text" },
+      { key: "quantity", label: "Quantity on hand", type: "number", required: true },
+      { key: "unitPrice", label: "Unit price (RWF)", type: "number", required: true, format: "currency" },
+      { key: "location", label: "Storage location", type: "text" },
+      { key: "notes", label: "Notes", type: "textarea" }
+    ],
+    listColumns: ["itemName", "sku", "quantity", "unitPrice"]
+  },
+
+  projects: {
+    name: "Projects",
+    singular: "project",
+    collection: "projects",
+    fields: [
+      { key: "name", label: "Project name", type: "text", required: true },
+      { key: "manager", label: "Project manager", type: "text" },
+      {
+        key: "status", label: "Status", type: "select", badge: true,
+        options: ["Planned", "Ongoing", "Completed", "On Hold"]
+      },
+      { key: "budget", label: "Budget (RWF)", type: "number", format: "currency" },
+      { key: "startDate", label: "Start date", type: "date" },
+      { key: "endDate", label: "End date", type: "date" },
+      { key: "description", label: "Description", type: "textarea" }
+    ],
+    listColumns: ["name", "manager", "status", "budget"]
+  },
+
+  budgets: {
+    name: "Make Budget",
+    singular: "budget line",
+    collection: "budgets",
+    fields: [
+      { key: "period", label: "Period (e.g. 2026 or Q1 2026)", type: "text", required: true },
+      { key: "category", label: "Budget category", type: "text", required: true },
+      { key: "plannedAmount", label: "Planned amount (RWF)", type: "number", required: true, format: "currency" },
+      { key: "actualAmount", label: "Actual amount so far (RWF)", type: "number", format: "currency" },
+      { key: "notes", label: "Notes", type: "textarea" }
+    ],
+    listColumns: ["period", "category", "plannedAmount", "actualAmount"]
+  }
+};
+
+export function formatCurrency(n) {
+  const num = Number(n) || 0;
+  return num.toLocaleString("en-US", { maximumFractionDigits: 0 }) + " RWF";
+}
+
+export const INVOICE_STATUSES = ["Draft", "Sent", "Paid", "Overdue"];
+export const BILL_STATUSES = ["Unpaid", "Paid", "Overdue"];
