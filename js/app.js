@@ -3,27 +3,38 @@ import {
   auth, db, secondaryAuth,
   onAuthStateChanged, signOut,
   createUserWithEmailAndPassword,
-  doc, getDoc, setDoc, updateDoc, deleteDoc,
+  doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc,
   addDoc, collection, query, where, onSnapshot, serverTimestamp
 } from "./firebase-config.js";
 import {
   DEPARTMENTS, PRESBYTERIES, allScopes, scopeLabel,
-  ACCOUNT_TYPES, accountTypeLabel, accountTypeColor
+  ACCOUNT_TYPES, accountTypeLabel, accountTypeColor,
+  MODULES, formatCurrency, INVOICE_STATUSES, BILL_STATUSES
 } from "./structure.js";
 
 let currentUser = null;     // { uid, email }
 let profile = null;         // { name, email, role, scopeType, scopeId }
+
 let unsubscribeRecords = null;
 let unsubscribeUsers = null;
 let unsubscribeReports = null;
 let unsubscribeAccounts = null;
+let unsubscribeModule = null;
+let unsubscribeDocs = null;   // invoices / bills
+
 let cachedRecords = [];
 let cachedAccounts = [];
+let cachedModuleRows = [];
+let cachedDocs = [];          // invoices or bills currently on screen
+
 let activeCategory = "All";
 let activeAccountType = "All";
+
 let editingRecordId = null;
 let editingUserId = null;
 let editingAccountId = null;
+let editingModuleId = null;
+let editingDocId = null;
 
 // Reports state — persists while navigating so filters don't reset every click
 let reportScope = "all";        // "all" | "department:<id>" | "presbytery:<id>"
@@ -77,6 +88,16 @@ $("logoutBtn").addEventListener("click", async () => {
 
 window.addEventListener("hashchange", route);
 
+/* ========================= FINANCE ACCESS RULE ========================== */
+// Only the Super Admin and staff assigned to the Finance & Administration
+// department can create/edit/delete finance records. Everyone else (other
+// departments, presbyteries) can view them — useful for cross-checking —
+// but can't change them.
+function canEditFinance() {
+  return profile.role === "superadmin" ||
+    (profile.scopeType === "department" && profile.scopeId === "finance_admin");
+}
+
 /* ============================== SIDEBAR ================================ */
 
 function buildSidebar() {
@@ -86,7 +107,6 @@ function buildSidebar() {
   if (profile.role === "superadmin") {
     nav.appendChild(navItem("Overview", "#/overview"));
     nav.appendChild(navItem("Reports", "#/reports"));
-    nav.appendChild(navItem("Chart of Accounts", "#/accounts"));
 
     nav.appendChild(sectionLabel("Departments"));
     for (const [id, d] of Object.entries(DEPARTMENTS)) {
@@ -98,16 +118,34 @@ function buildSidebar() {
       nav.appendChild(navItem(p.name, `#/presbytery/${id}`));
     }
 
+    appendFinanceNav(nav);
+
     nav.appendChild(sectionLabel("Administration"));
     nav.appendChild(navItem("Manage staff accounts", "#/users"));
   } else {
     // A department/presbytery user only ever sees their own scope + reports
-    // + the (read-only) chart of accounts.
+    // + the finance section (view-only unless they're Finance & Admin staff).
     const label = scopeLabel(profile.scopeType, profile.scopeId);
     nav.appendChild(navItem(label, `#/${profile.scopeType}/${profile.scopeId}`));
     nav.appendChild(navItem("Reports", "#/reports"));
-    nav.appendChild(navItem("Chart of Accounts", "#/accounts"));
+
+    appendFinanceNav(nav);
   }
+}
+
+function appendFinanceNav(nav) {
+  nav.appendChild(sectionLabel("Finance & Administration"));
+  nav.appendChild(navItem("Chart of Accounts", "#/accounts"));
+  nav.appendChild(navItem("Invoices", "#/invoices"));
+  nav.appendChild(navItem("Bills", "#/bills"));
+  nav.appendChild(navItem("Record Expense", "#/module/expenses"));
+  nav.appendChild(navItem("Record Income", "#/module/income"));
+  nav.appendChild(navItem("Customers", "#/module/customers"));
+  nav.appendChild(navItem("Suppliers", "#/module/suppliers"));
+  nav.appendChild(navItem("Inventory", "#/module/inventory"));
+  nav.appendChild(navItem("Projects", "#/module/projects"));
+  nav.appendChild(navItem("Make Budget", "#/module/budgets"));
+  nav.appendChild(navItem("Financial Statements", "#/financials"));
 }
 
 function sectionLabel(text) {
@@ -142,10 +180,10 @@ function route() {
   const [scopeType, scopeId] = parts;
 
   // Guard: staff can only ever view their own assigned scope. Reports and
-  // Chart of Accounts are exempt — everyone may see them, staff just can't
-  // pick a different scope inside Reports, and can't edit accounts.
+  // the whole Finance & Administration section are exempt — everyone may
+  // see them; edit rights inside finance are handled by canEditFinance().
   if (profile.role !== "superadmin") {
-    const exempt = scopeType === "reports" || scopeType === "accounts";
+    const exempt = ["reports", "accounts", "module", "invoices", "bills", "financials"].includes(scopeType);
     if (!exempt && (scopeType !== profile.scopeType || scopeId !== profile.scopeId)) {
       location.hash = `#/${profile.scopeType}/${profile.scopeId}`;
       return;
@@ -160,6 +198,14 @@ function route() {
     renderAccounts();
   } else if (scopeType === "users" && profile.role === "superadmin") {
     renderUsers();
+  } else if (scopeType === "module" && MODULES[scopeId]) {
+    renderModule(scopeId);
+  } else if (scopeType === "invoices") {
+    renderDocList("invoice");
+  } else if (scopeType === "bills") {
+    renderDocList("bill");
+  } else if (scopeType === "financials") {
+    renderFinancials();
   } else if (scopeType === "department" && DEPARTMENTS[scopeId]) {
     renderScope("department", scopeId);
   } else if (scopeType === "presbytery" && PRESBYTERIES[scopeId]) {
@@ -174,6 +220,8 @@ function cleanupListeners() {
   if (unsubscribeUsers) { unsubscribeUsers(); unsubscribeUsers = null; }
   if (unsubscribeReports) { unsubscribeReports(); unsubscribeReports = null; }
   if (unsubscribeAccounts) { unsubscribeAccounts(); unsubscribeAccounts = null; }
+  if (unsubscribeModule) { unsubscribeModule(); unsubscribeModule = null; }
+  if (unsubscribeDocs) { unsubscribeDocs(); unsubscribeDocs = null; }
 }
 
 /* ============================== OVERVIEW ================================ */
@@ -201,12 +249,14 @@ function renderOverview() {
       <div class="panel-body">
         <div class="chips">
           ${allIds.map(s => `<a class="chip" href="#/${s.type}/${s.id}">${s.name}</a>`).join("")}
+          <a class="chip" href="#/invoices">Invoices</a>
+          <a class="chip" href="#/bills">Bills</a>
+          <a class="chip" href="#/financials">Financial Statements</a>
         </div>
       </div>
     </div>
   `;
 
-  // Live count per scope, superadmin can read everything.
   unsubscribeRecords = onSnapshot(collection(db, "records"), (snap) => {
     const counts = {};
     snap.forEach(d => {
@@ -363,7 +413,6 @@ function computeReportRange() {
     return { from: `${today.getFullYear()}-01-01`, to: `${today.getFullYear()}-12-31` };
   }
 
-  // custom
   return { from: reportCustomFrom || null, to: reportCustomTo || null };
 }
 
@@ -373,8 +422,6 @@ function renderReports() {
   $("pageActions").innerHTML = `<button class="btn btn-primary" style="width:auto;" id="printReportBtn">🖨 Print report</button>`;
   $("printReportBtn").addEventListener("click", () => window.print());
 
-  // Staff are always locked to their own scope; superadmin keeps whatever
-  // scope was last selected (defaults to "all" the very first time).
   if (profile.role !== "superadmin") {
     reportScope = `${profile.scopeType}:${profile.scopeId}`;
   }
@@ -491,7 +538,7 @@ function subscribeReportData() {
 }
 
 function paintReport() {
-  if (!$("reportBody")) return; // navigated away before this ran
+  if (!$("reportBody")) return;
 
   const { from, to } = computeReportRange();
   const rangeValid = reportPreset !== "custom" || (from && to);
@@ -613,10 +660,6 @@ function closeRecordModal() {
 $("recordCancelBtn").addEventListener("click", closeRecordModal);
 
 /* =========================== CHART OF ACCOUNTS ============================ */
-// A single, global list of accounts (Asset / Liability / Equity / Income /
-// Expense) stored in the "accounts" Firestore collection. Everyone can view
-// it (useful when reconciling records against a report); only the Super
-// Admin can add, edit, or delete accounts.
 
 function renderAccounts() {
   const isAdmin = profile.role === "superadmin";
@@ -669,7 +712,7 @@ function renderAccounts() {
 
 function paintAccounts(isAdmin) {
   const body = $("accountsBody");
-  if (!body) return; // navigated away before this ran
+  if (!body) return;
 
   const rows = activeAccountType === "All"
     ? cachedAccounts
@@ -772,6 +815,496 @@ function closeAccountModal() {
 }
 $("accountCancelBtn").addEventListener("click", closeAccountModal);
 
+/* ===================== GENERIC FINANCE MODULE ENGINE ====================== */
+// Drives Record Expense, Record Income, Customers, Suppliers, Inventory,
+// Projects and Make Budget from the MODULES config in structure.js. One
+// engine, tailored fields per module — add a module to structure.js and it
+// works here with no further code.
+
+function renderModule(moduleId) {
+  const cfg = MODULES[moduleId];
+  const isEditor = canEditFinance();
+
+  $("pageTitle").textContent = cfg.name;
+  $("pageCrumb").textContent = isEditor
+    ? "Finance & Administration — add, edit, and manage"
+    : "Finance & Administration — view only";
+  $("pageActions").innerHTML = isEditor
+    ? `<button class="btn btn-primary" style="width:auto;" id="addModuleBtn">+ Add ${cfg.singular}</button>`
+    : "";
+  if (isEditor) $("addModuleBtn").addEventListener("click", () => openModuleModal(moduleId));
+
+  $("content").innerHTML = `
+    <div class="panel">
+      <div class="panel-head"><h2>${cfg.name}</h2></div>
+      <div class="panel-body" id="moduleBody"><div class="empty-state">Loading…</div></div>
+    </div>
+  `;
+
+  unsubscribeModule = onSnapshot(collection(db, cfg.collection), (snap) => {
+    cachedModuleRows = [];
+    snap.forEach(d => cachedModuleRows.push({ id: d.id, ...d.data() }));
+    cachedModuleRows.sort((a, b) => (b.updatedAt?.seconds || b.createdAt?.seconds || 0) - (a.updatedAt?.seconds || a.createdAt?.seconds || 0));
+    paintModule(moduleId, isEditor);
+  }, (err) => {
+    $("moduleBody").innerHTML = `<div class="empty-state">Couldn't load data. ${err.message}</div>`;
+  });
+}
+
+function paintModule(moduleId, isEditor) {
+  const cfg = MODULES[moduleId];
+  const body = $("moduleBody");
+  if (!body) return;
+
+  if (cachedModuleRows.length === 0) {
+    body.innerHTML = `<div class="empty-state"><div class="big">Nothing here yet</div>${
+      isEditor ? `Add your first ${cfg.singular} using the button above.` : "Check back later."
+    }</div>`;
+    return;
+  }
+
+  body.innerHTML = `
+    <div class="table-scroll">
+      <table>
+        <thead><tr>
+          ${cfg.listColumns.map(key => `<th>${cfg.fields.find(f => f.key === key).label}</th>`).join("")}
+          ${isEditor ? "<th></th>" : ""}
+        </tr></thead>
+        <tbody>
+          ${cachedModuleRows.map(row => `
+            <tr>
+              ${cfg.listColumns.map(key => `<td>${formatModuleCell(cfg, key, row[key])}</td>`).join("")}
+              ${isEditor ? `
+                <td class="row-actions">
+                  <button class="btn btn-ghost btn-sm" data-edit="${row.id}">Edit</button>
+                  <button class="btn btn-danger btn-sm" data-del="${row.id}">Delete</button>
+                </td>` : ""}
+            </tr>`).join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+
+  if (!isEditor) return;
+
+  body.querySelectorAll("[data-edit]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const row = cachedModuleRows.find(r => r.id === btn.dataset.edit);
+      openModuleModal(moduleId, row);
+    });
+  });
+  body.querySelectorAll("[data-del]").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      if (confirm(`Delete this ${cfg.singular}? This cannot be undone.`)) {
+        await deleteDoc(doc(db, cfg.collection, btn.dataset.del));
+      }
+    });
+  });
+}
+
+function formatModuleCell(cfg, key, value) {
+  const field = cfg.fields.find(f => f.key === key);
+  if (value === undefined || value === null || value === "") return "—";
+  if (field?.format === "currency") return formatCurrency(value);
+  if (field?.badge) return `<span class="tag">${escapeHtml(value)}</span>`;
+  return escapeHtml(value);
+}
+
+function openModuleModal(moduleId, record = null) {
+  const cfg = MODULES[moduleId];
+  editingModuleId = record ? record.id : null;
+
+  $("moduleModalTitle").textContent = record ? `Edit ${cfg.singular}` : `Add ${cfg.singular}`;
+  $("moduleError").style.display = "none";
+
+  $("moduleFields").innerHTML = cfg.fields.map(f => moduleFieldHtml(f, record?.[f.key])).join("");
+  $("moduleModalBackdrop").classList.add("open");
+
+  $("moduleForm").onsubmit = async (e) => {
+    e.preventDefault();
+    const payload = {};
+    for (const f of cfg.fields) {
+      const el = $("mf_" + f.key);
+      payload[f.key] = f.type === "number" ? (parseFloat(el.value) || 0) : el.value.trim();
+    }
+    payload.updatedAt = serverTimestamp();
+    payload.updatedBy = currentUser.email;
+
+    try {
+      if (editingModuleId) {
+        await updateDoc(doc(db, cfg.collection, editingModuleId), payload);
+      } else {
+        await addDoc(collection(db, cfg.collection), {
+          ...payload,
+          createdAt: serverTimestamp(),
+          createdBy: currentUser.email
+        });
+      }
+      closeModuleModal();
+    } catch (err) {
+      $("moduleError").textContent = "Couldn't save: " + err.message;
+      $("moduleError").style.display = "block";
+    }
+  };
+}
+
+function moduleFieldHtml(f, value) {
+  const id = "mf_" + f.key;
+  const v = value === undefined || value === null ? "" : value;
+  if (f.type === "textarea") {
+    return `<div class="field"><label for="${id}">${f.label}</label><textarea id="${id}" rows="3">${escapeHtml(v)}</textarea></div>`;
+  }
+  if (f.type === "select") {
+    return `<div class="field"><label for="${id}">${f.label}</label>
+      <select id="${id}" ${f.required ? "required" : ""}>
+        <option value="">— Select —</option>
+        ${f.options.map(o => `<option ${o === v ? "selected" : ""}>${o}</option>`).join("")}
+      </select></div>`;
+  }
+  return `<div class="field"><label for="${id}">${f.label}</label>
+    <input type="${f.type}" id="${id}" ${f.required ? "required" : ""} ${f.type === "number" ? 'step="any"' : ""} value="${escapeHtml(v)}"></div>`;
+}
+
+function closeModuleModal() {
+  $("moduleModalBackdrop").classList.remove("open");
+  editingModuleId = null;
+}
+$("moduleCancelBtn").addEventListener("click", closeModuleModal);
+
+/* ========================= INVOICES & BILLS ============================== */
+// Shared engine for two collections that both need line items and a
+// computed total: "invoice" -> collection "invoices", "bill" -> collection
+// "bills". Everything else about them (labels, statuses) is looked up from
+// the `kind`.
+
+const DOC_KIND = {
+  invoice: {
+    collection: "invoices", title: "Invoice", titlePlural: "Invoices",
+    partyLabel: "Customer", numberLabel: "Invoice #", statuses: INVOICE_STATUSES
+  },
+  bill: {
+    collection: "bills", title: "Bill", titlePlural: "Bills",
+    partyLabel: "Supplier", numberLabel: "Bill #", statuses: BILL_STATUSES
+  }
+};
+
+function renderDocList(kind) {
+  const meta = DOC_KIND[kind];
+  const isEditor = canEditFinance();
+
+  $("pageTitle").textContent = meta.titlePlural;
+  $("pageCrumb").textContent = isEditor
+    ? "Finance & Administration — add, edit, and manage"
+    : "Finance & Administration — view only";
+  $("pageActions").innerHTML = isEditor
+    ? `<button class="btn btn-primary" style="width:auto;" id="addDocBtn">+ New ${meta.title.toLowerCase()}</button>`
+    : "";
+  if (isEditor) $("addDocBtn").addEventListener("click", () => openDocModal(kind));
+
+  $("content").innerHTML = `
+    <div class="panel">
+      <div class="panel-head"><h2>${meta.titlePlural}</h2></div>
+      <div class="panel-body" id="docListBody"><div class="empty-state">Loading…</div></div>
+    </div>
+  `;
+
+  unsubscribeDocs = onSnapshot(collection(db, meta.collection), (snap) => {
+    cachedDocs = [];
+    snap.forEach(d => cachedDocs.push({ id: d.id, ...d.data() }));
+    cachedDocs.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+    paintDocList(kind, isEditor);
+  }, (err) => {
+    $("docListBody").innerHTML = `<div class="empty-state">Couldn't load data. ${err.message}</div>`;
+  });
+}
+
+function paintDocList(kind, isEditor) {
+  const meta = DOC_KIND[kind];
+  const body = $("docListBody");
+  if (!body) return;
+
+  if (cachedDocs.length === 0) {
+    body.innerHTML = `<div class="empty-state"><div class="big">No ${meta.titlePlural.toLowerCase()} yet</div>${
+      isEditor ? `Create your first ${meta.title.toLowerCase()} using the button above.` : "Check back later."
+    }</div>`;
+    return;
+  }
+
+  body.innerHTML = `
+    <div class="table-scroll">
+      <table>
+        <thead><tr>
+          <th>${meta.numberLabel}</th><th>${meta.partyLabel}</th><th>Date</th><th>Due</th><th>Status</th><th>Total</th>${isEditor ? "<th></th>" : ""}
+        </tr></thead>
+        <tbody>
+          ${cachedDocs.map(d => `
+            <tr>
+              <td><strong>${escapeHtml(d.number || "—")}</strong></td>
+              <td>${escapeHtml(d.party || "—")}</td>
+              <td>${d.date || "—"}</td>
+              <td>${d.dueDate || "—"}</td>
+              <td><span class="tag ${d.status === "Paid" ? "gold" : ""}">${d.status || "—"}</span></td>
+              <td>${formatCurrency(d.total)}</td>
+              ${isEditor ? `
+                <td class="row-actions">
+                  <button class="btn btn-ghost btn-sm" data-edit="${d.id}">Edit</button>
+                  <button class="btn btn-danger btn-sm" data-del="${d.id}">Delete</button>
+                </td>` : ""}
+            </tr>`).join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+
+  if (!isEditor) return;
+
+  body.querySelectorAll("[data-edit]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const d = cachedDocs.find(r => r.id === btn.dataset.edit);
+      openDocModal(kind, d);
+    });
+  });
+  body.querySelectorAll("[data-del]").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      if (confirm(`Delete this ${meta.title.toLowerCase()}? This cannot be undone.`)) {
+        await deleteDoc(doc(db, meta.collection, btn.dataset.del));
+      }
+    });
+  });
+}
+
+function openDocModal(kind, record = null) {
+  const meta = DOC_KIND[kind];
+  editingDocId = record ? record.id : null;
+
+  $("docModalTitle").textContent = record ? `Edit ${meta.title.toLowerCase()}` : `New ${meta.title.toLowerCase()}`;
+  $("docError").style.display = "none";
+  $("docPartyLabel").textContent = meta.partyLabel;
+  $("docNumberLabel").textContent = meta.numberLabel;
+  $("docStatus").innerHTML = meta.statuses.map(s => `<option ${record?.status === s ? "selected" : ""}>${s}</option>`).join("");
+
+  $("docParty").value = record?.party || "";
+  $("docNumber").value = record?.number || "";
+  $("docDate").value = record?.date || "";
+  $("docDueDate").value = record?.dueDate || "";
+  $("docNotes").value = record?.notes || "";
+
+  $("docItemsRows").innerHTML = "";
+  const items = (record?.items && record.items.length > 0) ? record.items : [{ description: "", qty: 1, unitPrice: 0 }];
+  items.forEach(addDocItemRow);
+  recalcDocTotal();
+
+  $("docModalBackdrop").classList.add("open");
+
+  $("docAddItemBtn").onclick = () => addDocItemRow();
+
+  $("docForm").onsubmit = async (e) => {
+    e.preventDefault();
+    const items = collectDocItems();
+    if (items.length === 0) {
+      $("docError").textContent = "Add at least one line item.";
+      $("docError").style.display = "block";
+      return;
+    }
+    const total = items.reduce((sum, it) => sum + (it.qty * it.unitPrice), 0);
+
+    const payload = {
+      party: $("docParty").value.trim(),
+      number: $("docNumber").value.trim(),
+      date: $("docDate").value,
+      dueDate: $("docDueDate").value,
+      status: $("docStatus").value,
+      notes: $("docNotes").value.trim(),
+      items,
+      total,
+      updatedAt: serverTimestamp(),
+      updatedBy: currentUser.email
+    };
+
+    try {
+      if (editingDocId) {
+        await updateDoc(doc(db, meta.collection, editingDocId), payload);
+      } else {
+        await addDoc(collection(db, meta.collection), {
+          ...payload,
+          createdAt: serverTimestamp(),
+          createdBy: currentUser.email
+        });
+      }
+      closeDocModal();
+    } catch (err) {
+      $("docError").textContent = "Couldn't save: " + err.message;
+      $("docError").style.display = "block";
+    }
+  };
+}
+
+function addDocItemRow(item = { description: "", qty: 1, unitPrice: 0 }) {
+  const row = document.createElement("div");
+  row.className = "doc-item-row";
+  row.style.cssText = "display:flex;gap:8px;margin-bottom:8px;align-items:center;";
+  row.innerHTML = `
+    <input type="text" placeholder="Description" class="doc-item-desc" style="flex:3;" value="${escapeHtml(item.description || "")}">
+    <input type="number" step="any" min="0" placeholder="Qty" class="doc-item-qty" style="flex:1;" value="${item.qty ?? 1}">
+    <input type="number" step="any" min="0" placeholder="Unit price" class="doc-item-price" style="flex:1;" value="${item.unitPrice ?? 0}">
+    <span class="doc-item-line-total" style="flex:1;font-size:13px;color:var(--ink-soft);white-space:nowrap;"></span>
+    <button type="button" class="btn btn-danger btn-sm doc-item-remove" style="width:auto;">✕</button>
+  `;
+  $("docItemsRows").appendChild(row);
+
+  const recalc = () => recalcDocTotal();
+  row.querySelector(".doc-item-desc").addEventListener("input", recalc);
+  row.querySelector(".doc-item-qty").addEventListener("input", recalc);
+  row.querySelector(".doc-item-price").addEventListener("input", recalc);
+  row.querySelector(".doc-item-remove").addEventListener("click", () => {
+    row.remove();
+    recalcDocTotal();
+  });
+
+  recalcDocTotal();
+}
+
+function collectDocItems() {
+  const items = [];
+  document.querySelectorAll("#docItemsRows .doc-item-row").forEach(row => {
+    const description = row.querySelector(".doc-item-desc").value.trim();
+    const qty = parseFloat(row.querySelector(".doc-item-qty").value) || 0;
+    const unitPrice = parseFloat(row.querySelector(".doc-item-price").value) || 0;
+    if (description || qty || unitPrice) items.push({ description, qty, unitPrice });
+  });
+  return items;
+}
+
+function recalcDocTotal() {
+  let total = 0;
+  document.querySelectorAll("#docItemsRows .doc-item-row").forEach(row => {
+    const qty = parseFloat(row.querySelector(".doc-item-qty").value) || 0;
+    const unitPrice = parseFloat(row.querySelector(".doc-item-price").value) || 0;
+    const lineTotal = qty * unitPrice;
+    row.querySelector(".doc-item-line-total").textContent = formatCurrency(lineTotal);
+    total += lineTotal;
+  });
+  if ($("docTotalDisplay")) $("docTotalDisplay").textContent = formatCurrency(total);
+}
+
+function closeDocModal() {
+  $("docModalBackdrop").classList.remove("open");
+  editingDocId = null;
+}
+$("docCancelBtn").addEventListener("click", closeDocModal);
+
+/* =========================== FINANCIAL STATEMENTS ========================= */
+// A read-only, computed Income Statement pulling from Record Income,
+// Record Expense, paid Invoices (revenue) and paid Bills (expenses).
+// One-time fetch with a manual Refresh button, rather than four permanent
+// live listeners, since this is a summary view rather than a working list.
+
+async function renderFinancials() {
+  $("pageTitle").textContent = "Financial Statements";
+  $("pageCrumb").textContent = "Computed income statement — Income & paid Invoices vs Expenses & paid Bills";
+  $("pageActions").innerHTML = `
+    <span style="display:flex;gap:8px;">
+      <button class="btn btn-ghost" style="width:auto;" id="refreshFinancialsBtn">↻ Refresh</button>
+      <button class="btn btn-primary" style="width:auto;" id="printFinancialsBtn">🖨 Print</button>
+    </span>
+  `;
+  $("printFinancialsBtn").addEventListener("click", () => window.print());
+  $("content").innerHTML = `
+    <div class="print-header">
+      <div class="print-crest">EPR</div>
+      <div><h2>Income Statement</h2><div class="crumb" id="finMeta"></div></div>
+    </div>
+    <div class="stat-grid" id="finSummary"></div>
+    <div class="panel">
+      <div class="panel-head"><h2>Revenue by category</h2></div>
+      <div class="panel-body" id="finRevenueBody"><div class="empty-state">Loading…</div></div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h2>Expenses by category</h2></div>
+      <div class="panel-body" id="finExpenseBody"><div class="empty-state">Loading…</div></div>
+    </div>
+  `;
+  $("refreshFinancialsBtn").addEventListener("click", loadFinancials);
+  await loadFinancials();
+}
+
+async function loadFinancials() {
+  if (!$("finSummary")) return;
+  $("finRevenueBody").innerHTML = `<div class="empty-state">Loading…</div>`;
+  $("finExpenseBody").innerHTML = `<div class="empty-state">Loading…</div>`;
+
+  const [incomeSnap, expenseSnap, invoiceSnap, billSnap] = await Promise.all([
+    getDocs(collection(db, "income")),
+    getDocs(collection(db, "expenses")),
+    getDocs(collection(db, "invoices")),
+    getDocs(collection(db, "bills"))
+  ]);
+
+  const revenueByCategory = {};
+  let revenueTotal = 0;
+  incomeSnap.forEach(d => {
+    const r = d.data();
+    const cat = r.category || "Uncategorized";
+    revenueByCategory[cat] = (revenueByCategory[cat] || 0) + (Number(r.amount) || 0);
+    revenueTotal += Number(r.amount) || 0;
+  });
+  invoiceSnap.forEach(d => {
+    const r = d.data();
+    if (r.status === "Paid") {
+      revenueByCategory["Paid invoices"] = (revenueByCategory["Paid invoices"] || 0) + (Number(r.total) || 0);
+      revenueTotal += Number(r.total) || 0;
+    }
+  });
+
+  const expenseByCategory = {};
+  let expenseTotal = 0;
+  expenseSnap.forEach(d => {
+    const r = d.data();
+    const cat = r.category || "Uncategorized";
+    expenseByCategory[cat] = (expenseByCategory[cat] || 0) + (Number(r.amount) || 0);
+    expenseTotal += Number(r.amount) || 0;
+  });
+  billSnap.forEach(d => {
+    const r = d.data();
+    if (r.status === "Paid") {
+      expenseByCategory["Paid bills"] = (expenseByCategory["Paid bills"] || 0) + (Number(r.total) || 0);
+      expenseTotal += Number(r.total) || 0;
+    }
+  });
+
+  const net = revenueTotal - expenseTotal;
+
+  $("finMeta").textContent = `All time · Generated ${new Date().toLocaleString()} · By ${profile.name || currentUser.email}`;
+  $("finSummary").innerHTML = `
+    <div class="stat-card"><div class="label">Total revenue</div><div class="stat-value">${formatCurrency(revenueTotal)}</div></div>
+    <div class="stat-card"><div class="label">Total expenses</div><div class="stat-value">${formatCurrency(expenseTotal)}</div></div>
+    <div class="stat-card"><div class="label">${net >= 0 ? "Net surplus" : "Net deficit"}</div><div class="stat-value">${formatCurrency(Math.abs(net))}</div></div>
+  `;
+
+  $("finRevenueBody").innerHTML = categoryTableHtml(revenueByCategory, revenueTotal);
+  $("finExpenseBody").innerHTML = categoryTableHtml(expenseByCategory, expenseTotal);
+}
+
+function categoryTableHtml(byCategory, total) {
+  const entries = Object.entries(byCategory).sort((a, b) => b[1] - a[1]);
+  if (entries.length === 0) return `<div class="empty-state">No data yet.</div>`;
+  return `
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Category</th><th>Amount</th><th>% of total</th></tr></thead>
+        <tbody>
+          ${entries.map(([cat, amt]) => `
+            <tr>
+              <td>${escapeHtml(cat)}</td>
+              <td>${formatCurrency(amt)}</td>
+              <td>${total > 0 ? ((amt / total) * 100).toFixed(1) : "0.0"}%</td>
+            </tr>`).join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
 /* ============================ MANAGE USERS =============================== */
 
 function renderUsers() {
@@ -851,8 +1384,6 @@ function openUserModal(user = null) {
   $("uPassword").value = "";
   $("uRole").value = user?.role || "staff";
 
-  // Editing an existing account: email/password are fixed in Firebase Auth,
-  // only role/scope/name can change from this screen.
   const isEditing = !!user;
   $("uEmailField").style.display = isEditing ? "none" : "block";
   $("uPasswordField").style.display = isEditing ? "none" : "block";
@@ -880,8 +1411,6 @@ function openUserModal(user = null) {
         const password = $("uPassword").value;
         if (password.length < 6) throw new Error("Password must be at least 6 characters.");
 
-        // Created through the secondary app instance so the Super Admin's
-        // own session in the primary app is not replaced.
         const cred = await createUserWithEmailAndPassword(secondaryAuth, email, password);
         await setDoc(doc(db, "users", cred.user.uid), {
           name, email, role, scopeType, scopeId,
