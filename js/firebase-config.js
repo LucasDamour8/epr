@@ -1,6 +1,5 @@
 // js/firebase-config.js
 // Central Firebase setup. Every other file imports { auth, db, secondaryAuth } from here.
-
 import { initializeApp, getApps } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-app.js";
 import {
   getAuth,
@@ -14,6 +13,7 @@ import {
   getFirestore,
   doc,
   getDoc,
+  getDocs,
   setDoc,
   updateDoc,
   deleteDoc,
@@ -57,6 +57,7 @@ export {
   updatePassword,
   doc,
   getDoc,
+  getDocs,
   setDoc,
   updateDoc,
   deleteDoc,
